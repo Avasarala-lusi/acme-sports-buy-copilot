@@ -1,13 +1,8 @@
 import pytest
 
-from engine.config import ROOT, load_config
+from engine.config import load_config
 from engine.data_loader import TABLES, load_data
-
-RAW = ROOT / "data" / "raw"
-needs_data = pytest.mark.skipif(
-    not all((RAW / f).exists() for f in TABLES.values()),
-    reason="client data not present in data/raw (it is not committed)",
-)
+from tests.conftest import needs_data
 
 
 def test_config_has_spec_thresholds():

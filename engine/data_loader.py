@@ -45,10 +45,10 @@ class AcmeData:
     issues: list[str] = field(default_factory=list)
 
     def __getattr__(self, name: str) -> pd.DataFrame:
-        try:
-            return self.tables[name]
-        except KeyError as e:
-            raise AttributeError(name) from e
+        tables = self.__dict__.get("tables")
+        if tables is None or name not in tables:
+            raise AttributeError(name)
+        return tables[name]
 
 
 def load_data(raw_dir: Path | str | None = None) -> AcmeData:

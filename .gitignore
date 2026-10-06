@@ -17,3 +17,6 @@ venv/
 .vscode/
 .idea/
 .env
+
+# Generated outputs (derived from client data)
+outputs/

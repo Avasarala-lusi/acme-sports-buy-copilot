@@ -1,33 +1,46 @@
 # Every business threshold lives here (spec section 8.3: no hardcoded thresholds).
 # Client decisions from the Week 2 review (Oct 5, 2026) are marked [client].
+# Team assumptions awaiting confirmation are marked [assumption].
 
 data:
   raw_dir: data/raw
-  weeks_used: all            # [client] use all 100 weeks, not 52
-  dtc_as_single_customer: true  # [client] DTC is one bulk customer
+  output_dir: outputs
+  weeks_used: all                # [client] use all 100 weeks, not 52
+  dtc_as_single_customer: true   # [client] DTC is one bulk customer
 
 buying_window:
-  frequency: monthly         # [client] one buying window per month
-  week_of_month: 3           # [client] window falls in the third week
-  lookahead_windows: 4       # spec 3.3: project demand over the next 4 windows
+  frequency: monthly             # [client] one buying window per month
+  cutoff_day: 21                 # [client] window falls in the third week; we use the 21st as its cutoff
+  lookahead_windows: 4           # spec 3.3: project load over the next 4 windows
 
 capacity:
-  backup_threshold_pct: 85   # spec 3.2: route to backup at >= 85% utilisation
-  source: rolling_ledger     # [client] recompute from our own assignments, not fact_factory_utilization
+  backup_threshold_pct: 85       # spec 3.2: route to backup when the factory is >= 85% consumed
+  source: rolling_ledger         # [client] recompute from our own assignments, not fact_factory_utilization
+  spread_over_manufacturing: true  # [assumption] a lot's units are spread evenly over its manufacturing weeks
+  when_backup_also_full: least_loaded_with_warning  # [assumption] open question; flag for the planner
+
+lead_times:
+  other_factory: midpoint        # [assumption] lead time at a factory other than the PR's own = midpoint of the factory's min/max
 
 quantities:
-  moq_per_market: 300        # spec rule 3
-  mpq_apparel: 1200
-  mpq_footwear: 2400
+  moq_per_market: 300            # spec rule 3
+  mpq:
+    apparel: 1200
+    footwear: 2400
 
 grouping:
-  window_days: 15            # spec rule 2
-  mode: anchor               # anchor | chain  (open question, see Trello Blockers)
+  window_days: 15                # spec rule 2
+  mode: anchor                   # anchor | chain  (open question, see Trello Blockers)
 
 piggyback:
-  tolerance_pct: 5           # spec rule 4: auto-trigger within 5% of threshold
+  tolerance_pct: 5               # spec rule 4: auto-trigger within 5% of the threshold
+
+carry_forward:
+  wait_if_not_late: true         # [assumption] a lot below MOQ/MPQ waits for the next run if it can still start on time
 
 last_chance:
-  on_capacity_conflict: warn  # [client] warn, don't block the plan
+  include_forecast_only: true    # [assumption] catalogue is closing, so buy all outstanding demand
+  on_quantity_shortfall: warn    # [client] warn, don't block
+  on_capacity_conflict: warn     # [client] warn, don't block
 
-backup_source: article       # article | factory  (open question; PR data follows article-level 100%)
+backup_source: article           # article | factory  (open question; the PR data follows article-level 100%)
