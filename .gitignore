@@ -1,0 +1,19 @@
+# Client data (Globant synthetic dataset): keep local, never commit
+data/raw/
+data/processed/
+*.docx
+*.pdf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+.env

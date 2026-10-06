@@ -1,0 +1,33 @@
+# Every business threshold lives here (spec section 8.3: no hardcoded thresholds).
+# Client decisions from the Week 2 review (Oct 5, 2026) are marked [client].
+
+data:
+  raw_dir: data/raw
+  weeks_used: all            # [client] use all 100 weeks, not 52
+  dtc_as_single_customer: true  # [client] DTC is one bulk customer
+
+buying_window:
+  frequency: monthly         # [client] one buying window per month
+  week_of_month: 3           # [client] window falls in the third week
+  lookahead_windows: 4       # spec 3.3: project demand over the next 4 windows
+
+capacity:
+  backup_threshold_pct: 85   # spec 3.2: route to backup at >= 85% utilisation
+  source: rolling_ledger     # [client] recompute from our own assignments, not fact_factory_utilization
+
+quantities:
+  moq_per_market: 300        # spec rule 3
+  mpq_apparel: 1200
+  mpq_footwear: 2400
+
+grouping:
+  window_days: 15            # spec rule 2
+  mode: anchor               # anchor | chain  (open question, see Trello Blockers)
+
+piggyback:
+  tolerance_pct: 5           # spec rule 4: auto-trigger within 5% of threshold
+
+last_chance:
+  on_capacity_conflict: warn  # [client] warn, don't block the plan
+
+backup_source: article       # article | factory  (open question; PR data follows article-level 100%)
