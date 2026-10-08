@@ -90,6 +90,10 @@ class Planner:
         trn = prs["transportation_lead_time"].where(same, prs["primary"].map(mid_trn))
         prs["release_primary"] = prs["rdd_original"] - pd.to_timedelta(mfg + trn, unit="D")
         self.prs = prs.set_index("pr_id", drop=False)
+        self.rows: dict[str, dict] = self.prs.to_dict("index")
+        self.mid_lt = {f: (round((r["mfg_lt_min_days"] + r["mfg_lt_max_days"]) / 2),
+                           round((r["trans_lt_min_days"] + r["trans_lt_max_days"]) / 2))
+                       for f, r in fac.iterrows()}
 
         runs = d.runs.sort_values("week_number").reset_index(drop=True)
         self.runs = runs
@@ -108,26 +112,28 @@ class Planner:
         self.processed = -1
 
     # ---------------------------------------------------------------- helpers
-    def lead_times(self, pr: pd.Series, factory: str) -> tuple[int, int]:
+    def lead_times(self, pr, factory: str) -> tuple[int, int]:
+        """Lead times for a requisition (row dict or Series) at a factory."""
         if factory == pr["assigned_factory"]:
             return int(pr["manufacturing_lead_time"]), int(pr["transportation_lead_time"])
-        f = self.factories.loc[factory]
-        return (round((f["mfg_lt_min_days"] + f["mfg_lt_max_days"]) / 2),
-                round((f["trans_lt_min_days"] + f["trans_lt_max_days"]) / 2))
+        return self.mid_lt[factory]
 
     def lot_lead_times(self, pr_ids: list[str], factory: str) -> tuple[int, int]:
-        lts = [self.lead_times(self.prs.loc[p], factory) for p in pr_ids]
+        lts = [self.lead_times(self.rows[p], factory) for p in pr_ids]
         return max(m for m, _ in lts), max(t for _, t in lts)
 
     def release_at(self, pr_id: str, factory: str) -> pd.Timestamp:
-        if factory == self.prs.at[pr_id, "primary"]:
-            return self.prs.at[pr_id, "release_primary"]
-        pr = self.prs.loc[pr_id]
+        pr = self.rows[pr_id]
+        if factory == pr["primary"]:
+            return pr["release_primary"]
         m, t = self.lead_times(pr, factory)
         return timing.release_date(pr["rdd_original"], m, t)
 
     def _qty(self, pr_ids) -> float:
-        return float(self.prs.loc[list(pr_ids), "requested_qty"].sum())
+        return float(sum(self.rows[p]["requested_qty"] for p in pr_ids))
+
+    def _min_rdd(self, pr_ids) -> pd.Timestamp:
+        return min(self.rows[p]["rdd_original"] for p in pr_ids)
 
     def _decide(self, pr_ids, run_id: str, outcome: str, reason: str, lot_id: str | None = None):
         for p in pr_ids:
@@ -161,7 +167,7 @@ class Planner:
         # --- Rule 5 on new demand, then Rule 6 / Rule 1 on the whole open pool
         notes: dict[str, list[str]] = {}
         for p in self.new_by_run.get(run_id, []):
-            pr = self.prs.loc[p]
+            pr = self.rows[p]
             excluded = exclusion.forecast_excluded(pr["channel_id"], pr["has_order"], pr["early_buy"])
             if excluded and not (pr["last_chance"] and lc_forecast):
                 self._decide([p], run_id, FUTURE_FORECAST, exclusion.EXCLUSION_REASON)
@@ -246,7 +252,7 @@ class Planner:
         self.ledger = ledger
 
         # --- record bought lots
-        for n, lot in enumerate(sorted(lots, key=lambda l: self.prs.loc[l.pr_ids, "rdd_original"].min()), 1):
+        for n, lot in enumerate(sorted(lots, key=lambda l: self._min_rdd(l.pr_ids)), 1):
             lot.lot_id = f"{run_id}-L{n:03d}"
             row = self._lot_row(lot, placed[id(lot)], notes)
             self.lot_rows.append(row)
@@ -266,7 +272,7 @@ class Planner:
         lot.pr_ids.extend(picked)
         lot.piggyback_prs.extend(picked)
         used_future.update(picked)
-        sources = sorted({window_label(natural_window(self.release_at(p, self.prs.loc[p, "primary"]), cutoff))
+        sources = sorted({window_label(natural_window(self.release_at(p, self.rows[p]["primary"]), cutoff))
                           for p in picked})
         lot.piggyback_sources.extend(s for s in sources if s not in lot.piggyback_sources)
         lot.reasons.append(f"{why}; pulled {self._qty(picked):.0f} units forward from {', '.join(sources)}")
@@ -274,18 +280,18 @@ class Planner:
     def _can_wait(self, pr_ids, market, next_po) -> bool:
         if not self.cfg["carry_forward"]["wait_if_not_late"]:
             return False
-        return all(self.release_at(p, self.prs.loc[p, "primary"]) >= next_po for p in pr_ids)
+        return all(self.rows[p]["release_primary"] >= next_po for p in pr_ids)
 
     def _assign(self, lots: list[Lot], po_date):
         cfg = self.cfg["capacity"]
         ledger = self.ledger.copy()
         placed = {}
-        order = sorted(lots, key=lambda l: self.prs.loc[l.pr_ids, "rdd_original"].min())
+        order = sorted(lots, key=lambda l: self._min_rdd(l.pr_ids))
         for lot in order:
-            first = self.prs.loc[lot.pr_ids[0]]
+            first = self.rows[lot.pr_ids[0]]
             primary, backup = first["primary"], first["backup"]
             certified = self.certified[lot.article_id]
-            rdd = self.prs.loc[lot.pr_ids, "rdd_original"].min()
+            rdd = self._min_rdd(lot.pr_ids)
 
             def plan_at(f):
                 m, t = self.lot_lead_times(lot.pr_ids, f)
@@ -316,7 +322,7 @@ class Planner:
             groups.setdefault((lot.article_id, placed[id(lot)]["factory"]), []).append(lot)
         changed, keep = False, []
         for (article, factory), glots in groups.items():
-            category = self.prs.loc[glots[0].pr_ids[0], "category"]
+            category = self.rows[glots[0].pr_ids[0]]["category"]
             mpq = mpq_for(category, mpq_cfg)
             total = sum(self._qty(l.pr_ids) for l in glots)
             status = quantity_status(total, mpq, tol)
@@ -326,7 +332,7 @@ class Planner:
                 picked = pick_to_fill(mpq - total, list(zip(c["pr_id"], c["requested_qty"])))
                 if picked:
                     for p in picked:
-                        target = next(l for l in glots if l.market == self.prs.loc[p, "market_destination"])
+                        target = next(l for l in glots if l.market == self.rows[p]["market_destination"])
                         self._apply_piggyback(target, [p], used_future, cutoff,
                                               f"Rule 4: {factory} total {total:.0f} was within {tol}% of MPQ {mpq}")
                     keep.extend(glots)

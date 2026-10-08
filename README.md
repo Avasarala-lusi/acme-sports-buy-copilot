@@ -8,10 +8,11 @@ supply-chain challenge.
   Writes `fact_buy_plan_suggestions` for all 100 MRP runs.
 - **Planner app:** select a week → generate the plan → test a change → export (CSV and Excel).
 - **What-if scenarios:** hold a customer, check minimums, delay production, switch factories.
+- **Go/No-Go decisions:** Buy / No-Go / Delay, factory switches and customer holds saved as manual changes, reversible.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows, with per-market MOQ checks.
 - **Trend notebook:** the five required analyses over 100 weeks.
 - **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan.
-- **Technical documentation:** `docs/technical_documentation.md`.
+- **Technical documentation:** `docs/technical_documentation.md`; hand-checkable calculations in `docs/worked_examples.md`.
 
 ## Phase 2: next
 Load forecast, network optimiser across all six factories, delay-risk simulation, RL threshold tuning, custom front end.
@@ -27,7 +28,8 @@ python scripts/run_plan.py                 # plan all runs, write outputs/
 streamlit run app/streamlit_app.py         # planner app
 uvicorn api.main:app --reload              # REST API
 python notebooks/build_trend_notebook.py   # rebuild the trend notebook
-pytest                                     # 41 tests
+python scripts/build_worked_examples.py     # regenerate the worked examples
+pytest                                     # 58 tests
 ```
 
 ## Layout

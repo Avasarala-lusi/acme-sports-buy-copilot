@@ -7,6 +7,10 @@ pytestmark = needs_data
 APP = "app/streamlit_app.py"
 
 
+def by_label(widgets, label):
+    return next(w for w in widgets if w.label == label)
+
+
 @pytest.fixture(scope="module")
 def app():
     from streamlit.testing.v1 import AppTest
@@ -26,14 +30,21 @@ def test_week_renders(app, week_index):
 @pytest.mark.parametrize("scenario", ["Hold a customer", "Delay production", "Switch factories"])
 def test_scenarios_render(app, scenario):
     app.sidebar.selectbox[0].select_index(19).run()
-    app.radio[0].set_value(scenario).run()
+    by_label(app.radio, "Scenario").set_value(scenario).run()
     assert not app.exception, app.exception
 
 
 def test_switch_to_uncertified_factory_shows_error(app):
     app.sidebar.selectbox[0].select_index(19).run()
-    app.radio[0].set_value("Switch factories").run()
+    by_label(app.radio, "Scenario").set_value("Switch factories").run()
     target = next(s for s in app.selectbox if s.label.startswith("Move from"))
     bad = next(i for i, o in enumerate(target.options) if "not certified" in o)
     target.select_index(bad).run()
     assert any("not certified" in e.value for e in app.error)
+
+
+def test_settings_and_data_checks_are_shown(app):
+    app.sidebar.selectbox[0].select_index(19).run()
+    subheaders = [s.value for s in app.subheader]
+    assert "Settings to confirm with the client" in subheaders
+    assert "Data issues found on load" in subheaders
