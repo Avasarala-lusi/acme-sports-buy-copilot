@@ -3,7 +3,7 @@
 Team Vantage (University at Buffalo) × Globant. A weekly buy-planning engine and app for the Acme Sports
 supply-chain challenge.
 
-## Phase 1 (scoping review scope): done
+## Current capabilities
 - **Rule engine:** the six buy-plan rules, factory certification and capacity, with a reason for every lot.
   Writes `fact_buy_plan_suggestions` for all 100 MRP runs.
 - **Planner app:** select a week → generate the plan → test a change → export (CSV and Excel).
@@ -14,7 +14,7 @@ supply-chain challenge.
 - **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan.
 - **Technical documentation:** `docs/technical_documentation.md`; hand-checkable calculations in `docs/worked_examples.md`.
 
-## Phase 2: next
+## Roadmap
 Load forecast, network optimiser across all six factories, delay-risk simulation, RL threshold tuning, custom front end.
 
 ## Run it
@@ -27,7 +27,7 @@ Put the nine ACME CSVs in `data/raw/` (client data is never committed), then:
 python scripts/run_plan.py                 # plan all runs, write outputs/
 streamlit run app/streamlit_app.py         # planner app
 uvicorn api.main:app --reload              # REST API
-python notebooks/build_trend_notebook.py   # rebuild the trend notebook
+python notebooks/build_trend_notebook.py   # generate a fresh trend notebook (trend_analysis_generated.ipynb)
 python scripts/build_worked_examples.py     # regenerate the worked examples
 pytest                                     # 58 tests
 ```

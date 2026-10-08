@@ -1,6 +1,6 @@
-"""Acme Sports weekly buy planner (Phase 1 app).
+"""Acme Sports weekly buy planner.
 
-Workflow from the scoping review: 1 select a week -> 2 generate the plan -> 3 test a change -> 4 export.
+Workflow: 1 select a week -> 2 generate the plan -> 3 test a change -> 4 export.
 Manual Go/No-Go decisions are saved separately from the automatic plan and clearly marked.
 Run with:  streamlit run app/streamlit_app.py
 """

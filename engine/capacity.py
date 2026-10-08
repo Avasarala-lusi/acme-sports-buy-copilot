@@ -1,4 +1,4 @@
-"""Rolling capacity ledger built from our own assignments (Roberto, Week 2).
+"""Rolling capacity ledger built from our own assignments (client decision).
 
 Units are recorded per factory per production week. The static fact_factory_utilization
 table is not used for planning decisions.

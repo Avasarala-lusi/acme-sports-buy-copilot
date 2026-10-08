@@ -70,7 +70,7 @@ def test_quantity_status_moq(qty, expected):
     assert quantity_status(qty, 300, 5) == expected
 
 
-def test_hand_example_from_scoping_slides():
+def test_hand_example_hold_below_moq():
     # 400-unit lot, 150 units held -> 250 left, below MOQ 300 and outside the 5% tolerance
     assert quantity_status(400 - 150, 300, 5) == SHORT
 

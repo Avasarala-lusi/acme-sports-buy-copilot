@@ -1,6 +1,6 @@
 """Buying windows and production weeks.
 
-Roberto (Week 2): one buying window per month, in the third week. A requisition is bought
+Client decision: one buying window per month, in the third week. A requisition is bought
 "now" when waiting for the next window would start production too late.
 """
 from datetime import date, timedelta

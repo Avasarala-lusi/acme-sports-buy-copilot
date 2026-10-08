@@ -1,6 +1,6 @@
 """KPIs and the comparison against the as-is reference plan.
 
-Roberto's proposed metrics (Week 2): production cost, units arriving on time, unresolved demand.
+Client's proposed metrics: production cost, units arriving on time, unresolved demand.
 The "as-is" reference uses the factory assignments in the supplied data and buys every
 requisition in the run it appears, with no rules applied.
 """

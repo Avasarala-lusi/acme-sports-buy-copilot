@@ -1,11 +1,11 @@
-# Acme Sports Buy Planner: technical documentation (Phase 1)
+# Acme Sports Buy Planner: technical documentation
 
 Team Vantage · University at Buffalo × Globant · October 2026
 
-This document covers the Phase 1 scope agreed in the Week 2 scoping review: a weekly buy-plan engine that applies
+This document covers the scope agreed with the client: a weekly buy-plan engine that applies
 the specification's rules, a what-if simulator, capacity-driven pull-forward analysis, the trend notebook, the
-populated output table and the validation checks. Phase 2 (forecast-driven network optimisation, delay risk and RL)
-builds on this engine.
+populated output table and the validation checks. Planned extensions (forecast-driven network optimisation,
+delay risk and learned thresholds) build on this engine.
 
 ## 1. How to run
 
@@ -15,7 +15,7 @@ pip install -r requirements.txt
 python scripts/run_plan.py                 # plan all 100 runs, write outputs/
 streamlit run app/streamlit_app.py         # planner app (select week, plan, test a change, export)
 uvicorn api.main:app --reload              # REST API for a custom front end
-python notebooks/build_trend_notebook.py   # rebuild and execute the trend notebook
+python notebooks/build_trend_notebook.py   # generate a fresh trend notebook (trend_analysis_generated.ipynb)
 python scripts/build_worked_examples.py     # regenerate docs/worked_examples.md
 pytest                                     # 58 tests
 ```
@@ -55,14 +55,14 @@ All of these are also listed in the app's **Data & checks** tab.
 | 9,946 DTC sales orders have no customer record | Client decision: treat DTC as one bulk customer |
 | Article-level and factory-level backups differ for 27 of 40 articles | Open question; article-level used (config `backup_source`), since the supplied PR data follows it 100% |
 | The 3 C-rated customers have no sales orders | Raised with the client; hold scenario demonstrated with B-rated customers and DTC |
-| No promised vs actual delivery dates | Delay risk is simulated in Phase 2, not predicted |
+| No promised vs actual delivery dates | Delay risk will be simulated in a planned extension, not predicted |
 | `channel_id` stored as 1/2, not "01"/"02" | Normalised on load |
 | Spec example says ID03 costs 15% more than VN01; the factory table says 0.95 vs 1.10 | Factory table used; flagged to the client |
 
 All keys are unique, every requisition references a known article, every supplied assignment is certified, and every
 RDD is after its MRP run date.
 
-## 4. Client decisions applied (Week 2 review)
+## 4. Client decisions applied
 
 - Use all 100 weeks.
 - One buying window per month, in the third week (cutoff on the 21st, configurable).
@@ -158,7 +158,7 @@ from the ledger plus open demand placed at its primary factory. Windows at or ab
 grouped by article and market: pull into the earliest lower-load window, check MOQ for that market, and show the
 extra cost of the alternative (routing to the backup in the overloaded window).
 
-## 9. Validation (success criteria from the scoping review)
+## 9. Validation (agreed success criteria)
 
 | Check | Result |
 |---|---|
@@ -193,7 +193,7 @@ appears, with no rules. The agreed reference plan is still to be confirmed with 
 The as-is plan buys everything immediately and ignores MOQ (3,196 article-market lots below 300) and the wholesale
 exclusion rule, so its volumes are not comparable one to one. Our plan follows the rules and is slightly more
 expensive per unit because capacity routing does not yet look for the cheapest certified factory; that is the main
-target of the Phase 2 network optimiser.
+target of the planned network optimiser.
 
 ## 10. Deviations and assumptions
 
@@ -216,4 +216,4 @@ target of the Phase 2 network optimiser.
 2. Rule 2: anchor on the earliest RDD, or allow chaining?
 3. When both primary and backup exceed 85%: third factory, delay, or flag?
 4. The reference plan and the weighting of cost, on-time units and unresolved demand.
-5. Delivery history or permission to use public delay data (Phase 2).
+5. Delivery history or permission to use public delay data (planned extension).

@@ -1,5 +1,5 @@
 # Every business threshold lives here (spec section 8.3: no hardcoded thresholds).
-# Client decisions from the Week 2 review (Oct 5, 2026) are marked [client].
+# Client decisions (confirmed Oct 5, 2026) are marked [client].
 # Team assumptions awaiting confirmation are marked [assumption].
 
 data:

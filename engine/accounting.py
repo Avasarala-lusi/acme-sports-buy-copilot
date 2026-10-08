@@ -1,4 +1,4 @@
-"""Validation checks from the team's success criteria (Lusi's slide 8).
+"""Validation checks for the plan's agreed success criteria.
 
 - Complete accounting: every requisition seen has exactly one outcome; units add up.
 - Valid recommendations: every bought lot passes the business rules (or carries a warning).

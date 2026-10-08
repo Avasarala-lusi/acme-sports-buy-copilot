@@ -21,3 +21,6 @@ venv/
 
 # Generated outputs (derived from client data)
 outputs/
+
+# Locally generated notebook (regenerate with notebooks/build_trend_notebook.py)
+notebooks/trend_analysis_generated.ipynb
