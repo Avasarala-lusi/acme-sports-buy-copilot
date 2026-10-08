@@ -16,10 +16,11 @@ python scripts/run_plan.py                 # plan all 100 runs, write outputs/
 streamlit run app/streamlit_app.py         # planner app (select week, plan, test a change, export)
 uvicorn api.main:app --reload              # REST API for a custom front end
 python notebooks/build_trend_notebook.py   # rebuild and execute the trend notebook
-pytest                                     # 41 tests
+python scripts/build_worked_examples.py     # regenerate docs/worked_examples.md
+pytest                                     # 58 tests
 ```
 
-The first full plan takes about 40 seconds; the planned engine is cached in `outputs/` and reloads in a few seconds.
+The first full plan takes about 8 seconds; the planned engine is cached in `outputs/` and reloads in about 2 seconds.
 The cache key includes the config and the engine source, so it is rebuilt automatically when either changes.
 
 ## 2. Code layout
@@ -36,6 +37,7 @@ The cache key includes the config and the engine source, so it is rebuilt automa
 | `engine/metrics.py` | KPIs and the comparison with the as-is reference |
 | `engine/pull_forward.py` | Capacity-driven pull-forward analysis (spec 3.3) |
 | `engine/output.py` | `fact_buy_plan_suggestions` and other output files; engine cache |
+| `engine/overrides.py` | Saved manual Go/No-Go decisions, applied on top of the automatic plan |
 | `sim/scenarios.py` | The what-if scenarios (spec section 5) |
 | `app/streamlit_app.py` | Planner app |
 | `api/main.py` | FastAPI service |
@@ -43,6 +45,8 @@ The cache key includes the config and the engine source, so it is rebuilt automa
 | `tests/` | Unit, integration and scenario tests |
 
 ## 3. Data findings
+
+All of these are also listed in the app's **Data & checks** tab.
 
 | Finding | Handling |
 |---|---|
@@ -133,6 +137,20 @@ All scenarios work on a copy of one run's plan.
 | Delay production | Shift a factory's production by N days: new arrival dates, late lots, late units, affected customers and NSV at risk |
 | Switch factories | Certification check, cost-multiplier and lead-time deltas, new arrival date, MOQ status and target-factory load |
 
+### Manual decisions (Go/No-Go)
+
+The spec requires the tool to distinguish automatic rules from manual overrides. The engine's plan is never
+changed; planner decisions are saved separately (`outputs/overrides.json`) and applied on top:
+
+| Override | Effect |
+|---|---|
+| Lot decision: Buy / No-Go / Delay | No-Go and Delay lots are left out of the exported buy plan |
+| Factory switch (certified factories only) | Cost, lead time and arrival recalculated at the new factory |
+| Customer hold (applied from the what-if tab) | That customer's units removed from every lot; a lot with nothing left becomes No-Go; lots falling below MOQ get a warning |
+
+Every changed lot is marked `decision_type = manual` with a note explaining the change, KPIs show the change
+against the automatic plan, and a week can be reverted to the automatic plan in one click.
+
 ## 8. Pull-forward analysis (spec 3.3)
 
 For a run, the engine projects each factory's load over the current and next four monthly windows: committed lots
@@ -146,11 +164,17 @@ extra cost of the alternative (routing to the backup in the overloaded window).
 |---|---|
 | Valid recommendations: certified factory, single article and market, MOQ met or warned, grouping window respected | 0 violations |
 | Complete accounting: every requisition has one outcome, no requisition in two lots, units add up | Passed (24,962 requisitions, 17,175,451 units) |
-| Correct scenarios: hand-calculated checks | Passed (tests/test_scenarios.py) |
+| Correct scenarios: hand-calculated checks | Passed (tests/test_scenarios.py); worked examples in `docs/worked_examples.md` |
 | Comparison with a reference plan | See below |
 
-Tests: `pytest` runs 41 tests: 21 rule unit tests, 8 integration tests on the full plan, 6 scenario checks and
-6 data checks.
+Tests: `pytest` runs 58 tests: rule unit tests, integration tests on the full plan, scenario hand checks,
+manual-decision tests, data checks, and headless app tests. In addition, a full app sweep exercised all
+100 weeks and every scenario (1,694 interactions) and the save, apply and revert buttons on every tenth week
+(640 interactions), with no failures.
+
+`docs/worked_examples.md` walks through real lots step by step (purchase window, grouping, MOQ/MPQ, capacity
+routing, piggyback, wholesale exclusion, customer hold, delay, factory switch, accounting). The script that
+writes it re-checks every number against the engine.
 
 ### Comparison with the as-is reference
 

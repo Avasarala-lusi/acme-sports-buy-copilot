@@ -31,3 +31,10 @@ def test_known_data_issues_reported():
     data = load_data()
     assert any("above 100% capacity" in i for i in data.issues)
     assert not any("uncertified" in i for i in data.issues)
+
+
+@needs_data
+def test_all_known_findings_are_reported():
+    issues = " ".join(load_data().issues)
+    for text in ["above 100% capacity", "no customer record", "C-rated", "backups differ", "home market"]:
+        assert text in issues, text

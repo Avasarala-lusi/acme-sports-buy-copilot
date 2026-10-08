@@ -93,6 +93,36 @@ def validate(data: AcmeData) -> list[str]:
 
     over = (data.utilization["utilization_pct"] > 100).sum()
     if over:
-        issues.append(f"utilization: {over} factory-weeks above 100% capacity (under client review)")
+        issues.append(f"utilization: {over} of {len(data.utilization)} factory-weeks above 100% capacity "
+                      f"(max {data.utilization['utilization_pct'].max():,.0f}%); under client review, "
+                      "the planner uses its own rolling ledger instead")
+
+    so, customers = data.sales_orders, data.customers
+    unknown = ~so["customer_id"].isin(customers["customer_id"])
+    if unknown.any():
+        dtc = so.loc[unknown, "customer_id"].str.startswith("DTC").sum()
+        issues.append(f"sales_orders: {unknown.sum():,} orders have no customer record ({dtc:,} are DTC); "
+                      "DTC is treated as one customer (client decision)")
+
+    c_rated = customers.loc[customers["credit_rating"] == "C", "customer_id"]
+    if len(c_rated) and not so["customer_id"].isin(c_rated).any():
+        issues.append(f"customers: the {len(c_rated)} C-rated customers have no sales orders, "
+                      "so C-rated exposure is $0")
+
+    arts = data.articles.merge(
+        data.factories[["factory_id", "backup_factory"]].rename(
+            columns={"factory_id": "primary_factory", "backup_factory": "factory_level_backup"}),
+        on="primary_factory")
+    differ = (arts["backup_factory"] != arts["factory_level_backup"]).sum()
+    if differ:
+        issues.append(f"articles: article-level and factory-level backups differ for {differ} of "
+                      f"{len(arts)} articles; article-level is used (open question)")
+
+    wholesale = so.merge(customers[["customer_id", "market"]], on="customer_id").merge(
+        prs[["pr_id", "market_destination"]], on="pr_id")
+    mismatch = (wholesale["market"] != wholesale["market_destination"]).mean()
+    if mismatch > 0:
+        issues.append(f"sales_orders: for {mismatch:.0%} of wholesale orders the customer's home market "
+                      "differs from the requisition's destination; destination is used")
 
     return issues
