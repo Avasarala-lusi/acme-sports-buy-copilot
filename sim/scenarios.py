@@ -1,4 +1,4 @@
-"""What-if scenarios (spec section 5, Lusi's slide 6).
+"""What-if scenarios
 
 Each scenario works on a copy of one run's plan and never changes the baseline.
 Every changed lot is marked decision_type = "manual".
