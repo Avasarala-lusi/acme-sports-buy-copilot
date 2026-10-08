@@ -29,6 +29,32 @@ def load_planner():
 
 
 planner = load_planner()
+
+
+@st.cache_data(show_spinner=False)
+def global_checks():
+    return accounting_report(planner), len(rule_violations(planner)), comparison_table(planner)
+
+
+@st.cache_data(show_spinner=False)
+def all_weeks_csv() -> str:
+    return fact_buy_plan_suggestions(planner).to_csv(index=False)
+
+
+@st.cache_data(show_spinner=False)
+def pull_forward_view(run_id: str):
+    return pull_forward.window_utilization(planner, run_id), pull_forward.recommendations(planner, run_id)
+
+
+@st.cache_data(show_spinner=False)
+def week_excel(run_id: str) -> bytes:
+    result = planner.run_result(run_id)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        fact_buy_plan_suggestions(planner, [run_id]).to_excel(xl, sheet_name="buy_plan", index=False)
+        result.lots.to_excel(xl, sheet_name="lot_details", index=False)
+        result.outcomes.to_excel(xl, sheet_name="decisions", index=False)
+    return buf.getvalue()
 runs = planner.runs.copy()
 runs["label"] = (runs["run_id"] + " · " + pd.to_datetime(runs["mrp_freeze_datetime_utc"]).dt.strftime("%d %b %Y")
                  + " · " + runs["season"] + " " + runs["range_version"])
@@ -123,18 +149,21 @@ with tab_change:
     if scenario == "Hold a customer":
         ids = lots["pr_ids"].str.split(",").explode() if len(lots) else pd.Series(dtype=str)
         customers = planner.prs.loc[ids, "customer_id"].dropna().value_counts()
-        cust = st.selectbox("Customer", customers.index,
-                            format_func=lambda c: f"{c} ({customers[c]} requisitions this week)")
-        r = scenarios.hold_customer(planner, run_id, cust)
-        a, b, c3 = st.columns(3)
-        a.metric("Lots affected", r["lots_affected"])
-        b.metric("NSV at risk", f"${r['nsv_at_risk_usd']:,.0f}")
-        c3.metric("Lots below MOQ after hold", len(r["moq_alerts"]))
-        if len(r["moq_alerts"]):
-            st.warning("Check minimums: some lots fall below MOQ after the hold. A suggested fix is shown per lot.")
-        st.dataframe(r["lots"], hide_index=True, use_container_width=True)
-        with st.expander("Units removed by size"):
-            st.dataframe(r["sizes"], hide_index=True, use_container_width=True)
+        cust_labels = {f"{c} ({n} requisitions this week)": c for c, n in customers.items()}
+        cust = cust_labels.get(st.selectbox("Customer", list(cust_labels)))
+        if cust is None:
+            st.info("No customer orders in this week's lots.")
+        else:
+            r = scenarios.hold_customer(planner, run_id, cust)
+            a, b, c3 = st.columns(3)
+            a.metric("Lots affected", r["lots_affected"])
+            b.metric("NSV at risk", f"${r['nsv_at_risk_usd']:,.0f}")
+            c3.metric("Lots below MOQ after hold", len(r["moq_alerts"]))
+            if len(r["moq_alerts"]):
+                st.warning("Check minimums: some lots fall below MOQ after the hold. A suggested fix is shown per lot.")
+            st.dataframe(r["lots"], hide_index=True, use_container_width=True)
+            with st.expander("Units removed by size"):
+                st.dataframe(r["sizes"], hide_index=True, use_container_width=True)
     elif scenario == "Delay production":
         f = st.selectbox("Factory", sorted(lots["assigned_factory"].unique()) if len(lots) else [])
         days = st.slider("Delay (days)", 1, 60, 14)
@@ -153,8 +182,8 @@ with tab_change:
             certified = planner.certified[lot["article_id"]]
             options = sorted((f for f in planner.factories.index if f != lot["assigned_factory"]),
                              key=lambda f: f not in certified)
-            target = st.selectbox(f"Move from {lot['assigned_factory']} to", options,
-                                  format_func=lambda f: f if f in certified else f"{f} (not certified)")
+            target_labels = {(f if f in certified else f"{f} (not certified)"): f for f in options}
+            target = target_labels[st.selectbox(f"Move from {lot['assigned_factory']} to", list(target_labels))]
             r = scenarios.swap_factory(planner, run_id, lot_id, target)
             if not r["valid"]:
                 st.error(r["message"])
@@ -174,11 +203,10 @@ with tab_change:
 with tab_pf:
     st.caption("Projected load for the next buying windows (committed lots plus open demand at its primary "
                "factory). Windows at or above the threshold get a pull-forward recommendation.")
-    util = pull_forward.window_utilization(planner, run_id)
+    util, rec = pull_forward_view(run_id)
     heat = util.pivot(index="factory_id", columns="window", values="avg_utilization_pct")
     st.plotly_chart(px.imshow(heat.round(0), text_auto=True, color_continuous_scale="OrRd", aspect="auto",
                               labels={"color": "Avg weekly load %"}), use_container_width=True)
-    rec = pull_forward.recommendations(planner, run_id)
     if len(rec):
         st.metric("Actionable recommendations", int(rec["actionable"].sum()), f"{len(rec)} groups reviewed")
         st.dataframe(rec, hide_index=True, use_container_width=True)
@@ -205,31 +233,24 @@ with tab_export:
     c1, c2, c3 = st.columns(3)
     c1.download_button("fact_buy_plan_suggestions (this week, CSV)", fact.to_csv(index=False),
                        f"fact_buy_plan_suggestions_{run_id}.csv", "text/csv")
-    c2.download_button("fact_buy_plan_suggestions (all weeks, CSV)",
-                       fact_buy_plan_suggestions(planner).to_csv(index=False),
+    c2.download_button("fact_buy_plan_suggestions (all weeks, CSV)", all_weeks_csv(),
                        "fact_buy_plan_suggestions_all.csv", "text/csv")
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
-        fact.to_excel(xl, "buy_plan", index=False)
-        lots.to_excel(xl, "lot_details", index=False)
-        result.outcomes.to_excel(xl, "decisions", index=False)
-    c3.download_button("Excel workbook (this week)", buf.getvalue(), f"buy_plan_{run_id}.xlsx")
+    c3.download_button("Excel workbook (this week)", week_excel(run_id), f"buy_plan_{run_id}.xlsx")
 
 # ------------------------------------------------------------------ data & checks
 with tab_checks:
     st.subheader("Success checks")
-    rep = accounting_report(planner)
-    viol = rule_violations(planner)
+    rep, n_violations, comparison = global_checks()
     a, b = st.columns(2)
     a.metric("Complete accounting", "PASSED" if rep["passed"] else "FAILED",
              f"{rep['prs_seen']:,} requisitions, {rep['units_seen']:,.0f} units")
-    b.metric("Rule violations without a warning", len(viol))
+    b.metric("Rule violations without a warning", n_violations)
     st.json(rep["checks"])
     st.write("Units by outcome (all runs)", pd.Series(rep["units_by_outcome"]).rename("units"))
     st.subheader("Comparison with the as-is reference (all runs)")
     st.caption("As-is = the factory assignments in the supplied data, buying every requisition when it appears. "
                "The reference plan for the final evaluation is still to be agreed with the client.")
-    st.dataframe(comparison_table(planner), hide_index=True, use_container_width=True)
+    st.dataframe(comparison, hide_index=True, use_container_width=True)
     st.subheader("Data issues found on load")
     for issue in planner.data.issues:
         st.write("•", issue)
