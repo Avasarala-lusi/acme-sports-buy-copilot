@@ -6,7 +6,8 @@ supply-chain challenge.
 ## Current capabilities
 - **Rule engine:** the six buy-plan rules, factory certification and capacity, with a reason for every lot.
   Writes `fact_buy_plan_suggestions` for all 100 MRP runs.
-- **Planner app:** select a week → generate the plan → test a change → export (CSV and Excel).
+- **Web app** (`frontend/`): buy plan with rule explanations and Go/No-Go decisions, what-if scenarios, pull-forward, capacity, export and data checks.
+- **Streamlit app** (`app/`): the same workflow in a lightweight analyst interface.
 - **What-if scenarios:** hold a customer, check minimums, delay production, switch factories.
 - **Go/No-Go decisions:** Buy / No-Go / Delay, factory switches and customer holds saved as manual changes, reversible.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows, with per-market MOQ checks.
@@ -25,8 +26,9 @@ pip install -r requirements.txt
 Put the nine ACME CSVs in `data/raw/` (client data is never committed), then:
 ```bash
 python scripts/run_plan.py                 # plan all runs, write outputs/
-streamlit run app/streamlit_app.py         # planner app
-uvicorn api.main:app --reload              # REST API
+uvicorn api.main:app --port 8000           # API (also serves the built web app at /ui)
+(cd frontend && npm install && npm run dev) # web app in development, http://localhost:5173
+streamlit run app/streamlit_app.py         # analyst app
 python notebooks/build_trend_notebook.py   # generate a fresh trend notebook (trend_analysis_generated.ipynb)
 python scripts/build_worked_examples.py     # regenerate the worked examples
 pytest                                     # 58 tests
@@ -40,6 +42,7 @@ pytest                                     # 58 tests
 | `sim/` | what-if scenarios |
 | `app/` | Streamlit planner app |
 | `api/` | FastAPI service |
+| `frontend/` | React web app (see frontend/README.md) |
 | `notebooks/` | trend analysis notebook and its builder |
 | `scripts/` | command-line runner |
 | `tests/` | pytest suite |

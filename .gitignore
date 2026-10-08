@@ -24,3 +24,7 @@ outputs/
 
 # Locally generated notebook (regenerate with notebooks/build_trend_notebook.py)
 notebooks/trend_analysis_generated.ipynb
+
+# Web front end build output and dependencies
+frontend/node_modules/
+frontend/dist/

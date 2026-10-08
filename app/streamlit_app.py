@@ -21,6 +21,7 @@ from engine.metrics import comparison_table  # noqa: E402
 from engine.output import fact_buy_plan_suggestions, get_planner  # noqa: E402
 from engine.overrides import DECISIONS, OverrideStore, effective_fact_table, effective_lots  # noqa: E402
 from engine.planner import FUTURE_FORECAST, UNRESOLVED_MOQ, UNRESOLVED_MPQ  # noqa: E402
+from engine.settings_info import settings_items  # noqa: E402
 from sim import scenarios  # noqa: E402
 
 st.set_page_config(page_title="Acme Sports Buy Planner", layout="wide")
@@ -336,20 +337,9 @@ with tab_checks:
 
     st.subheader("Settings to confirm with the client")
     cfg = planner.cfg
-    st.dataframe(pd.DataFrame([
-        ("Buying window", f"Monthly, cutoff day {cfg['buying_window']['cutoff_day']}", "Client decision (third week); cutoff day is our reading"),
-        ("Capacity source", "Rolling ledger from our assignments", "Client decision"),
-        ("Weeks used", "All 100", "Client decision"),
-        ("DTC", "One customer", "Client decision"),
-        ("Last-chance conflicts", "Warn, don't block", "Client decision"),
-        ("Backup factory", f"{cfg['backup_source']}-level", "Assumption: confirm"),
-        ("15-day grouping", cfg["grouping"]["mode"], "Assumption: confirm (anchor = from earliest RDD)"),
-        ("Primary and backup both over 85%", "Less-loaded factory plus warning", "Assumption: confirm"),
-        ("Lot below MOQ/MPQ", "Waits for the next run if it can still start on time", "Assumption: confirm"),
-        ("MOQ fix after a hold", "Same market only (spec 3.3)", "Assumption: spec example says another market"),
-        ("Lead time at another factory", "Midpoint of the factory's range", "Assumption"),
-        ("Capacity use over time", "Spread over manufacturing weeks", "Assumption"),
-    ], columns=["Topic", "Current setting", "Status"]), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(settings_items(cfg)).rename(
+        columns={"topic": "Topic", "setting": "Current setting", "status": "Status"}),
+        hide_index=True, use_container_width=True)
 
     st.subheader("Comparison with the as-is reference (all runs)")
     st.caption("As-is = the factory assignments in the supplied data, buying every requisition when it appears. "
