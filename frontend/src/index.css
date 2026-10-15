@@ -57,8 +57,8 @@
   --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05);
   --shadow-pop: 0 16px 48px -12px rgb(16 24 40 / 0.3);
 
-  --animate-fade-up: fade-up 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-  --animate-slide-in: slide-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-fade-up: fade-up 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  --animate-slide-in: slide-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
   --animate-shimmer: shimmer 1.4s linear infinite;
 
   @keyframes fade-up {
