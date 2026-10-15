@@ -2,10 +2,24 @@
 
 - Complete accounting: every requisition seen has exactly one outcome; units add up.
 - Valid recommendations: every bought lot passes the business rules (or carries a warning).
+- Capacity: no factory week is loaded beyond the hard limit except by labelled last-chance lots.
+- Monthly buying: purchases are only committed in buying runs.
 """
 import pandas as pd
 
-from engine.planner import BOUGHT, Planner
+from engine.capacity import CapacityLedger
+from engine.planner import BOUGHT, PLANNER_REVIEW, Planner
+
+
+def overload_without_last_chance(planner: Planner) -> float:
+    """Highest weekly load (%) from bought lots, leaving out last-chance lots."""
+    lots = planner.bought_lots()
+    ledger = CapacityLedger(planner.factories["weekly_capacity_units"].to_dict(),
+                            planner.cfg["capacity"]["spread_over_manufacturing"])
+    for lot in lots[~lots["last_chance"]].itertuples():
+        ledger.add(lot.assigned_factory, lot.production_start, lot.mfg_days, lot.consolidated_qty)
+    t = ledger.table()
+    return float(t["utilization_pct"].max()) if len(t) else 0.0
 
 
 def accounting_report(planner: Planner) -> dict:
@@ -14,11 +28,16 @@ def accounting_report(planner: Planner) -> dict:
     lots = planner.all_lots()
 
     in_lots = (lots["pr_ids"].str.split(",").explode() if len(lots) else pd.Series(dtype=str))
+    ids_of = lambda d: set(lots.loc[lots["auto_decision"] == d, "pr_ids"].str.split(",").explode()) if len(lots) else set()
+    hard = planner.cfg["capacity"]["hard_limit_pct"]
     units_by_outcome = out.groupby("outcome")["requested_qty"].sum().to_dict()
     checks = {
         "every_pr_has_one_outcome": set(out["pr_id"]) == set(seen["pr_id"]) and out["pr_id"].is_unique,
         "no_pr_in_two_lots": in_lots.is_unique,
-        "bought_prs_match_lots": set(in_lots) == set(out.loc[out["outcome"] == BOUGHT, "pr_id"]),
+        "bought_prs_match_lots": ids_of("Buy") == set(out.loc[out["outcome"] == BOUGHT, "pr_id"]),
+        "review_prs_match_lots": ids_of("Review") == set(out.loc[out["outcome"] == PLANNER_REVIEW, "pr_id"]),
+        "purchases_only_in_buying_windows": set(lots["run_id"]) <= set(planner.buying_runs()) if len(lots) else True,
+        "no_overload_except_last_chance": overload_without_last_chance(planner) <= hard + 1e-6,
         "units_add_up": abs(out["requested_qty"].sum() - seen["requested_qty"].sum()) < 1e-6,
         "lot_qty_matches_prs": bool(len(lots) == 0 or (
             lots["consolidated_qty"]
@@ -37,7 +56,7 @@ def accounting_report(planner: Planner) -> dict:
 
 def rule_violations(planner: Planner) -> pd.DataFrame:
     """Lots that break a rule without an explicit warning. Should always be empty."""
-    lots = planner.all_lots()
+    lots = planner.bought_lots()
     if lots.empty:
         return lots
     moq = planner.cfg["quantities"]["moq_per_market"]

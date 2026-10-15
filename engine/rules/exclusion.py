@@ -1,6 +1,7 @@
 """Rule 5: wholesale forecast exclusion, and Rule 6: last chance."""
 
 WHOLESALE = "01"
+DTC = "02"
 
 
 def forecast_excluded(channel_id: str, has_order: bool, early_buy: bool) -> bool:

@@ -16,8 +16,8 @@ SPEC_COLUMNS = ["suggestion_id", "run_id", "article_id", "market_destination", "
 
 
 def fact_buy_plan_suggestions(planner: Planner, run_ids: list[str] | None = None) -> pd.DataFrame:
-    """The spec's output table (Table 9)."""
-    lots = planner.all_lots()
+    """The spec's output table (Table 9): committed purchases only."""
+    lots = planner.bought_lots()
     if run_ids is not None:
         lots = lots[lots["run_id"].isin(run_ids)]
     out = lots.copy()
@@ -41,10 +41,13 @@ def write_outputs(planner: Planner, out_dir: Path | None = None) -> Path:
 
 
 def _config_hash(cfg: dict) -> str:
-    """Changes when the config or any engine source file changes, so stale caches are never used."""
+    """Changes when the config, any engine source file or any input data file changes, so stale caches are never used."""
     h = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode())
     for src in sorted((ROOT / "engine").rglob("*.py")):
         h.update(src.read_bytes())
+    for data_file in sorted((ROOT / cfg["data"]["raw_dir"]).glob("*.csv")):
+        st = data_file.stat()
+        h.update(f"{data_file.name}:{st.st_size}:{st.st_mtime_ns}".encode())
     return h.hexdigest()[:12]
 
 

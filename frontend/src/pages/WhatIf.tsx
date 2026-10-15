@@ -6,7 +6,7 @@ import type { Lot } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { Badge, Button, Card, Empty, ErrorBox, Loading, PageHeader, Segmented, Select, Stat, cx } from "../components/ui";
 import { useRun } from "../lib/run";
-import { date, int, money } from "../lib/format";
+import { date, int, load, money } from "../lib/format";
 
 type Mode = "hold" | "delay" | "swap";
 
@@ -17,7 +17,7 @@ export function WhatIf() {
 
   return (
     <>
-      <PageHeader title="Test a change"
+      <PageHeader eyebrow="What-if simulator" title="Test a change"
         subtitle="Scenarios run on a copy of this week's automatic plan. Nothing changes until you apply it; applied changes are saved as manual decisions." />
       <div className="mb-5">
         <Segmented value={mode} onChange={setMode} options={[
@@ -28,9 +28,14 @@ export function WhatIf() {
       </div>
       {plan.isLoading ? <Loading /> : plan.error ? <ErrorBox error={plan.error} /> : (
         <>
-          {mode === "hold" && <HoldScenario runId={runId} />}
-          {mode === "delay" && <DelayScenario runId={runId} lots={plan.data!.lots} />}
-          {mode === "swap" && <SwapScenario runId={runId} lots={plan.data!.lots} />}
+          {!plan.data!.is_buying_run && (
+            <div className="mb-4 rounded-lg bg-info-soft p-3 text-sm text-info">
+              This week is a draft of the {plan.data!.buying_window} window. Scenarios can be explored here; changes are applied in the buying run.
+            </div>
+          )}
+          {mode === "hold" && <HoldScenario runId={runId} draft={!plan.data!.is_buying_run} />}
+          {mode === "delay" && <DelayScenario runId={runId} lots={plan.data!.lots.filter((l) => l.auto_decision === "Buy")} />}
+          {mode === "swap" && <SwapScenario runId={runId} lots={plan.data!.lots} draft={!plan.data!.is_buying_run} />}
         </>
       )}
     </>
@@ -46,7 +51,7 @@ function Layout2({ controls, children }: { controls: React.ReactNode; children: 
   );
 }
 
-function HoldScenario({ runId }: { runId: string }) {
+function HoldScenario({ runId, draft }: { runId: string; draft: boolean }) {
   const qc = useQueryClient();
   const customers = useQuery({ queryKey: ["customers", runId], queryFn: () => api.customers(runId) });
   const overrides = useQuery({ queryKey: ["overrides", runId], queryFn: () => api.overrides(runId) });
@@ -76,12 +81,15 @@ function HoldScenario({ runId }: { runId: string }) {
         <Select label="Customer" value={customer} onChange={(e) => setCustomer(e.target.value)}>
           {(customers.data ?? []).map((c) => (
             <option key={c.customer_id} value={c.customer_id}>
-              {c.customer_id}{c.credit_rating ? ` · rating ${c.credit_rating}` : ""} · {c.n_prs} requisitions
+              {c.name ? `${c.name} (${c.customer_id})` : c.customer_id}{c.credit_rating ? ` · rating ${c.credit_rating}` : ""} · {c.n_prs} requisitions
             </option>
           ))}
         </Select>
-        <p className="text-xs text-muted">Removes this customer's units from every lot this week and shows the sales value at risk.</p>
-        <Button variant={held ? "danger" : "primary"} className="w-full" disabled={!customer || apply.isPending} onClick={() => apply.mutate()}>
+        <p className="text-xs text-muted">
+          Removes this customer's units from every lot this week and shows the sales value at risk. A lot that falls below MOQ
+          gets a fix from other customers' future demand only, and the plan is re-checked after the fix.
+        </p>
+        <Button variant={held ? "danger" : "primary"} className="w-full" disabled={draft || !customer || apply.isPending} onClick={() => apply.mutate()}>
           {held ? "Release hold" : "Apply hold to plan"}
         </Button>
         {held && <Badge tone="manual">Hold applied to the plan</Badge>}
@@ -109,6 +117,16 @@ function HoldScenario({ runId }: { runId: string }) {
             { key: "nsv_at_risk_usd", header: "Sales value at risk", align: "right", render: (l) => money(l.nsv_at_risk_usd) },
             { key: "moq_ok", header: "Minimum", render: (l) => (l.moq_ok ? <Badge tone="good">OK</Badge> : <Badge tone="warn">Below MOQ</Badge>) },
             { key: "fix", header: "Suggested fix", render: (l) => <span className="inline-block min-w-[300px] whitespace-normal text-muted">{l.fix ?? "—"}</span> },
+            { key: "qty_after_fix", header: "After fix", align: "right", render: (l) => int(l.qty_after_fix) },
+            { key: "checks", header: "Re-checked after fix", value: (l) => (l.moq_ok_after_fix && l.mpq_ok_after_fix ? 1 : 0), render: (l) => (
+              <div className="flex gap-1">
+                <Badge tone={l.moq_ok_after_fix ? "good" : "warn"}>MOQ</Badge>
+                <Badge tone={l.mpq_ok_after_fix ? "good" : "warn"} title={`${l.assigned_factory} total ${int(l.factory_total_after)} vs MPQ ${int(l.mpq)}`}>MPQ</Badge>
+                {l.factory_load_after_pct != null && (
+                  <Badge tone={l.factory_load_after_pct > 100 ? "bad" : l.factory_load_after_pct >= 85 ? "warn" : "good"}>{l.factory_load_after_pct.toFixed(0)}%</Badge>
+                )}
+              </div>
+            ) },
           ]} />
         </>
       )}
@@ -174,7 +192,7 @@ function DelayScenario({ runId, lots }: { runId: string; lots: Lot[] }) {
   );
 }
 
-function SwapScenario({ runId, lots }: { runId: string; lots: Lot[] }) {
+function SwapScenario({ runId, lots, draft }: { runId: string; lots: Lot[]; draft: boolean }) {
   const qc = useQueryClient();
   const factoriesQ = useQuery({ queryKey: ["factories"], queryFn: api.factories, staleTime: Infinity });
   const [lotId, setLotId] = useState(lots[0]?.lot_id ?? "");
@@ -210,7 +228,7 @@ function SwapScenario({ runId, lots }: { runId: string; lots: Lot[] }) {
             <option key={f} value={f}>{f}{certified.includes(f) ? "" : " (not certified)"}</option>
           ))}
         </Select>
-        {r && r.valid && (
+        {r && r.valid && !draft && (
           <Button variant="primary" className="w-full" disabled={apply.isPending || apply.isSuccess} onClick={() => apply.mutate()}>
             {apply.isSuccess ? "Switch applied" : `Apply switch to ${target}`}
           </Button>
@@ -232,6 +250,7 @@ function SwapScenario({ runId, lots }: { runId: string; lots: Lot[] }) {
                   <Row k="Cost" v={money(r.cost_before_usd)} />
                   <Row k="Cost multiplier" v={r.cost_multiplier_before.toFixed(2)} />
                   <Row k="Arrival" v={date(r.arrival_before)} />
+                  <Row k="Factory load" v={`${load(r.source_load_before_pct)} → ${load(r.source_load_after_pct)} after the move`} />
                 </dl>
               </Card>
               <div className="hidden items-center md:flex"><ArrowRight className="text-faint" /></div>
@@ -242,16 +261,25 @@ function SwapScenario({ runId, lots }: { runId: string; lots: Lot[] }) {
                   <Row k="Cost" v={<>{money(r.cost_after_usd)} <Delta value={r.cost_delta_usd} /></>} />
                   <Row k="Cost multiplier" v={r.cost_multiplier_after.toFixed(2)} />
                   <Row k="Arrival" v={<>{date(r.arrival_after)} {r.on_time_after ? <Badge tone="good">On time</Badge> : <Badge tone="bad">Late</Badge>}</>} />
+                  <Row k="Factory load" v={`${load(r.target_load_before_pct)} → ${load(r.target_utilization_pct)} with this lot`} />
                 </dl>
               </Card>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Stat label="Lead-time change" value={`${r.lead_time_delta_days > 0 ? "+" : ""}${r.lead_time_delta_days} days`} tone={r.lead_time_delta_days > 0 ? "warn" : "good"} />
-              <Stat label="Target factory load" value={`${r.target_utilization_pct.toFixed(0)}%`} tone={r.capacity_warning ? "warn" : "good"} />
+              <Stat label="Target load with this lot" value={load(r.target_utilization_pct)} tone={r.over_capacity ? "bad" : r.capacity_warning ? "warn" : "good"} />
               <Stat label="Minimum order still met" value={r.moq_still_met ? <span className="inline-flex items-center gap-1"><CheckCircle2 size={16} /> Yes</span> : "No"} tone={r.moq_still_met ? "good" : "bad"} />
+              <Stat label={`MPQ ${int(r.mpq)} at both factories`} value={r.mpq_source_ok && r.mpq_target_ok ? "Met" : "Not met"} tone={r.mpq_source_ok && r.mpq_target_ok ? "good" : "warn"} />
             </div>
-            {r.capacity_warning && (
-              <div className="rounded-lg bg-warn-soft p-3 text-sm text-warn">{r.to_factory} is above the capacity threshold in those production weeks.</div>
+            {r.over_capacity ? (
+              <div className="rounded-lg bg-bad-soft p-3 text-sm text-bad">{r.to_factory} would exceed its weekly capacity in those production weeks ({r.target_utilization_pct.toFixed(0)}%).</div>
+            ) : r.capacity_warning && (
+              <div className="rounded-lg bg-warn-soft p-3 text-sm text-warn">{r.to_factory} would be above the backup threshold in those production weeks.</div>
+            )}
+            {!(r.mpq_source_ok && r.mpq_target_ok) && (
+              <div className="rounded-lg bg-warn-soft p-3 text-sm text-warn">
+                After the move: {r.from_factory} has {int(r.source_total_after)} units of this article this window, {r.to_factory} has {int(r.target_total_after)} (MPQ {int(r.mpq)}).
+              </div>
             )}
           </>
         )

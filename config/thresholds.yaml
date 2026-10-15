@@ -6,18 +6,22 @@ data:
   raw_dir: data/raw
   output_dir: outputs
   weeks_used: all                # [client] use all 100 weeks, not 52
-  dtc_as_single_customer: true   # [client] DTC is one bulk customer
+  dtc_as_single_customer: false  # data v5 names every DTC account (ACME own channels, key accounts); the earlier
+                                 # client decision to treat DTC as one customer was for anonymous DTC ids
 
 buying_window:
-  frequency: monthly             # [client] one buying window per month
-  cutoff_day: 21                 # [client] window falls in the third week; we use the 21st as its cutoff
+  frequency: monthly             # [client] one buying window per month, in the third week
+  week_of_month: 3               # [assumption] third week = days 15-21; the buying run is the run whose PO date falls there
+  po_weekday: 2                  # PO execution weekday in the data (0 = Monday, 2 = Wednesday)
+  weekly_drafts: true            # [assumption] runs outside the buying window show a draft of it; nothing is committed
   lookahead_windows: 4           # spec 3.3: project load over the next 4 windows
 
 capacity:
   backup_threshold_pct: 85       # spec 3.2: route to backup when the factory is >= 85% consumed
   source: rolling_ledger         # [client] recompute from our own assignments, not fact_factory_utilization
   spread_over_manufacturing: true  # [assumption] a lot's units are spread evenly over its manufacturing weeks
-  when_backup_also_full: least_loaded_with_warning  # [assumption] open question; flag for the planner
+  hard_limit_pct: 100            # [assumption] a factory week can never be loaded beyond this (confirm: overtime?)
+  when_no_capacity: planner_review  # [assumption] planner_review | buy_with_warning; when no certified option has room
 
 lead_times:
   other_factory: midpoint        # [assumption] lead time at a factory other than the PR's own = midpoint of the factory's min/max
@@ -43,4 +47,5 @@ last_chance:
   on_quantity_shortfall: warn    # [client] warn, don't block
   on_capacity_conflict: warn     # [client] warn, don't block
 
-backup_source: article           # article | factory  (open question; the PR data follows article-level 100%)
+backup_source: factory_chain     # [assumption] factory_chain | factory | article. Data v5: every supplied backup
+                                 # assignment walks the factory chain (backup, its backup, ... to CN04, the last resort)

@@ -16,11 +16,16 @@ export function Export() {
 
   return (
     <>
-      <PageHeader title="Export" subtitle="The buy plan in the specification's output format (fact_buy_plan_suggestions)." />
+      <PageHeader eyebrow="fact_buy_plan_suggestions" title="Export" subtitle="The buy plan in the specification's output format (fact_buy_plan_suggestions). Lots that need planner review are left out until approved." />
+      {!p.is_buying_run && (
+        <Card className="mb-4 border-info/30 bg-info-soft p-3 text-sm text-info">
+          This week is a draft of the {p.buying_window} window. Its export is a preview; the all-weeks file contains committed purchases only.
+        </Card>
+      )}
       <div className="mb-5 grid gap-3 md:grid-cols-3">
         <DownloadCard href={api.exportUrl(runId, "csv")} icon={<FileText />} title="This week · CSV" text={`${rows.length} suggestions for ${runId}`} />
         <DownloadCard href={api.exportUrl(runId, "xlsx")} icon={<FileSpreadsheet />} title="This week · Excel" text="Buy plan, lot details and every decision" />
-        <DownloadCard href={api.exportAllUrl()} icon={<FileText />} title="All weeks · CSV" text="Automatic plan for all 100 runs" />
+        <DownloadCard href={api.exportAllUrl()} icon={<FileText />} title="All windows · CSV" text="Committed purchases from every buying run" />
       </div>
       {p.manual_changes > 0 && (
         <Card className="mb-4 p-3 text-sm text-muted">

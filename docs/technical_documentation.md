@@ -2,7 +2,7 @@
 
 Team Vantage · University at Buffalo × Globant · October 2026
 
-This document covers the scope agreed with the client: a weekly buy-plan engine that applies
+This document covers the scope agreed with the client: a buy-plan engine (weekly drafts, monthly purchases) that applies
 the specification's rules, a what-if simulator, capacity-driven pull-forward analysis, the trend notebook, the
 populated output table and the validation checks. Planned extensions (forecast-driven network optimisation,
 delay risk and learned thresholds) build on this engine.
@@ -15,12 +15,13 @@ pip install -r requirements.txt
 python scripts/run_plan.py                 # plan all 100 runs, write outputs/
 streamlit run app/streamlit_app.py         # planner app (select week, plan, test a change, export)
 uvicorn api.main:app --reload              # REST API for a custom front end
-python notebooks/build_trend_notebook.py   # generate a fresh trend notebook (trend_analysis_generated.ipynb)
+jupyter notebook notebooks/trend_analysis.ipynb  # the five trend analyses
 python scripts/build_worked_examples.py     # regenerate docs/worked_examples.md
-pytest                                     # 58 tests
+pytest                                     # 91 tests
 ```
 
-The first full plan takes about 8 seconds; the planned engine is cached in `outputs/` and reloads in about 2 seconds.
+The first full plan takes about 25 seconds (100 runs, including a draft for each of the 77 weeks between buying
+windows); the planned engine is cached in `outputs/` and reloads in a few seconds.
 The cache key includes the config and the engine source, so it is rebuilt automatically when either changes.
 
 ## 2. Code layout
@@ -28,11 +29,11 @@ The cache key includes the config and the engine source, so it is rebuilt automa
 | Path | Purpose |
 |---|---|
 | `config/thresholds.yaml` | Every threshold and every client decision; nothing is hardcoded in the engine |
-| `engine/data_loader.py` | Loads and validates the nine tables; reports data issues instead of failing |
-| `engine/calendar.py` | Monthly buying windows and production weeks |
+| `engine/data_loader.py` | Loads and validates the nine tables (customers, backup chain, certification); reports data issues instead of failing |
+| `engine/calendar.py` | Monthly buying windows (third-week PO day) and production weeks |
 | `engine/capacity.py` | Rolling capacity ledger built from our own assignments |
 | `engine/rules/` | One module per rule: timing (Rule 1), grouping (Rule 2), quantities (Rules 3–4), exclusion (Rules 5–6), assignment (certification and capacity) |
-| `engine/planner.py` | Runs the rule cascade one MRP run at a time and carries open demand forward |
+| `engine/planner.py` | Takes in demand every week, previews the next window in draft weeks, commits purchases in buying runs, carries open demand forward |
 | `engine/accounting.py` | Complete-accounting check and rule-violation check |
 | `engine/metrics.py` | KPIs and the comparison with the as-is reference |
 | `engine/pull_forward.py` | Capacity-driven pull-forward analysis (spec 3.3) |
@@ -41,55 +42,72 @@ The cache key includes the config and the engine source, so it is rebuilt automa
 | `sim/scenarios.py` | The what-if scenarios (spec section 5) |
 | `app/streamlit_app.py` | Planner app |
 | `api/main.py` | FastAPI service |
-| `notebooks/` | Trend analysis notebook and its builder |
+| `notebooks/` | Trend analysis notebook: the five required analyses |
 | `tests/` | Unit, integration and scenario tests |
 
 ## 3. Data findings
 
-All of these are also listed in the app's **Data & checks** tab.
+The engine runs on **data v5** (25,141 requisitions, 17.55M units, 17,845 sales orders). All findings are also listed
+in the app's **Data & checks** view.
 
 | Finding | Handling |
 |---|---|
 | 100 weekly runs supplied; the spec mentions 52 | Client decision: use all 100 weeks |
-| 336 of 600 factory-weeks above 100% utilisation (max 1,736%) | Client reviewing the source; the engine ignores the static table and uses its own rolling ledger |
-| 9,946 DTC sales orders have no customer record | Client decision: treat DTC as one bulk customer |
-| Article-level and factory-level backups differ for 27 of 40 articles | Open question; article-level used (config `backup_source`), since the supplied PR data follows it 100% |
-| The 3 C-rated customers have no sales orders | Raised with the client; hold scenario demonstrated with B-rated customers and DTC |
+| 317 of 600 factory-weeks above 100% utilisation in the static table (max 2,303%) | Client reviewing the source; the engine ignores the static table and uses its own rolling ledger |
+| Factory-level backups form an acyclic chain ending at CN04 (v5; v4 had a VN01 → ID03 → CN04 loop and BD02 ↔ IN06) | The engine walks the chain (`backup_source: factory_chain`); every supplied v5 backup assignment follows it |
+| Article-level and factory-level backups differ for 30 of 40 articles | Article-level routing remains available as a setting; see the comparison in section 6 |
+| Every requisition now names its customer (v5); DTC demand belongs to ACME's own channels and three key accounts | DTC is no longer one anonymous customer; holds work per named account |
+| The 3 C-rated customers now have 485 orders (about $66M) | Used for the credit-hold scenario |
 | No promised vs actual delivery dates | Delay risk will be simulated in a planned extension, not predicted |
 | `channel_id` stored as 1/2, not "01"/"02" | Normalised on load |
 | Spec example says ID03 costs 15% more than VN01; the factory table says 0.95 vs 1.10 | Factory table used; flagged to the client |
 
-All keys are unique, every requisition references a known article, every supplied assignment is certified, and every
-RDD is after its MRP run date.
+All keys are unique, every requisition references a known article and customer, every supplied assignment is
+certified, sales orders and requisitions name the same customer, and every RDD is after its MRP run date. The
+previous version's data is kept locally in `data/raw_v4/` for comparison.
 
 ## 4. Client decisions applied
 
 - Use all 100 weeks.
-- One buying window per month, in the third week (cutoff on the 21st, configurable).
+- One buying window per month, in the third week. The window is the PO execution day that falls on days 15-21
+  (our reading of "third week", configurable); the run with that PO date is the month's buying run.
 - Capacity is recomputed as a rolling window from our own assignments.
 - A unique PR ID is a unique demand; demand is never bought twice.
 - Last-chance conflicts raise a warning rather than blocking the plan.
-- DTC is one customer.
+- DTC is one customer (made for anonymous DTC ids; superseded by data v5, which names every DTC account).
 
 ## 5. The rule cascade
 
-Each MRP run is processed in order. The open pool is every requisition not yet decided: new ones from this run plus
-those carried from earlier runs.
+### Weekly drafts, monthly purchases
 
-1. **Rule 5, wholesale exclusion** (new demand): wholesale requisitions with no sales order get the final outcome
-   `FUTURE_FORECAST`, unless the article is Early Buy (always bought) or last chance.
-2. **Rule 6, last chance**: every open requisition of a last-chance article is due now, regardless of dates.
+The 100 weekly MRP runs are processed in order, and every run takes in its new demand. Of the 100 runs, 23 are
+**buying runs** (their PO date is the third-week window date). Only buying runs commit purchases, reserve
+factory capacity and close requisitions.
+
+The other 77 runs are **draft weeks**: the engine runs the full cascade as if the next window opened with the
+demand known that week, shows the result, and then restores its state. A draft changes nothing; it lets planners
+see the coming purchase build up. Draft lots are numbered `D001…`, committed lots `L001…`. Go/No-Go decisions,
+holds and factory switches are saved only in buying runs.
+
+### The cascade
+
+The open pool is every requisition not yet decided: new ones plus those carried from earlier runs.
+
+1. **Rule 5, wholesale exclusion** (applied as demand arrives, every week): wholesale requisitions with no sales
+   order get the final outcome `FUTURE_FORECAST`, unless the article is Early Buy (always bought) or last chance.
+2. **Rule 6, last chance**: every open requisition of a last-chance article is due in this window, regardless of dates.
 3. **Rule 1, purchase window**: release date = RDD − manufacturing lead time − transport lead time (at the primary
-   factory). A requisition is due when its release date falls before the *next* monthly window; otherwise it waits.
+   factory). A requisition is due when its release date falls before the *next* buying window; otherwise it waits.
 4. **Rule 2, grouping**: due requisitions are grouped by article and market; RDDs in a lot are within 15 days of the
    lot's earliest RDD (`anchor`), or of each other (`chain`, configurable, open question).
 5. **Rule 3, MOQ** (300 per market per article). If a lot is within 5% below MOQ, **Rule 4 piggyback** pulls whole
    future requisitions of the same article and market, earliest RDD first, and records the source window.
-   A lot still short either waits for the next run (if production could still start on time) or becomes
+   A lot still short either waits for the next window (if production could still start on time) or becomes
    `UNRESOLVED_MOQ`. Last-chance lots are bought with a warning.
 6. **Factory assignment** (certification and capacity): see section 6.
-7. **Rule 3, MPQ** (1,200 apparel, 2,400 footwear) per article per factory within the run, with the same Rule 4
-   piggyback, wait or `UNRESOLVED_MPQ` logic. Assignment and the MPQ check repeat until stable.
+7. **Rule 3, MPQ** (1,200 apparel, 2,400 footwear) per article per factory within the buying window, with the same
+   Rule 4 piggyback, wait or `UNRESOLVED_MPQ` logic. Lots sent to planner review do not count towards a factory's
+   total. Assignment and the MPQ check repeat until stable.
 
 Each bought lot records a plain-English reason for every rule that applied, and warnings for anything the planner
 should review. All engine decisions are `decision_type = auto`; what-if changes are `manual`.
@@ -100,31 +118,48 @@ Every requisition ends with exactly one outcome:
 
 | Outcome | Meaning | Requisitions | Units |
 |---|---|---|---|
-| `BOUGHT` | In a purchase lot | 15,982 | 11,815,627 |
-| `FUTURE_FORECAST` | Rule 5: wholesale forecast without an order | 6,375 | 4,326,491 |
-| `UNRESOLVED_MOQ` | Below MOQ and could not wait | 993 | 160,737 |
-| `UNRESOLVED_MPQ` | Below MPQ and could not wait | 598 | 291,793 |
-| `OPEN` | Not yet due at the end of the data (still waiting) | 1,014 | 580,803 |
+| `BOUGHT` | In a purchase lot committed in a buying run | 9,685 | 7,111,422 |
+| `PLANNER_REVIEW` | In a lot no certified factory had capacity for; not bought until a planner decides | 5,629 | 4,554,483 |
+| `FUTURE_FORECAST` | Rule 5: wholesale forecast without an order | 6,416 | 4,336,027 |
+| `UNRESOLVED_MOQ` | Below MOQ and could not wait for the next window | 1,156 | 192,066 |
+| `UNRESOLVED_MPQ` | Below MPQ and could not wait for the next window | 649 | 361,615 |
+| `OPEN` | Not yet due at the end of the data (still waiting) | 1,606 | 999,030 |
 
-Unresolved demand is shown separately in the app and is never treated as a feasible purchase.
+Unresolved and review demand is shown separately in the app and is never treated as a feasible purchase.
 
 ## 6. Factory assignment and the capacity ledger
 
-- The primary and backup factories come from `dim_article_master` (configurable); certification is always read from
-  `dim_factory_article_matrix`.
-- A lot's production starts at the later of its release date and the PO execution date, and its units are spread
-  evenly over its manufacturing weeks in the ledger.
-- If the primary is at or above 85% in those weeks, the lot goes to the backup, provided the backup is certified.
-- If both are at or above 85%, the lot goes to the less-loaded factory with a **capacity-conflict warning**
-  (open question with the client).
+- The primary factory comes from `dim_article_master`. Backups follow the factory-level chain from
+  `dim_factory_master` (`backup_source: factory_chain`): the primary's backup, then that factory's backup, and so on
+  to CN04, the last resort. Article-level backups (`article`) and a single factory-level step (`factory`) are the
+  alternatives. Certification is always read from `dim_factory_article_matrix`; uncertified backups are skipped.
+- A lot's production starts at the later of its release date and the buying window's PO date, and its units are
+  spread evenly over its manufacturing weeks in the ledger. Only committed lots are added to the ledger.
+- **Every capacity check includes the lot itself**: the load of a factory is its busiest production week *with the
+  lot added*. A lot stays on its primary while that is below 85%; otherwise it goes to the first certified backup in the
+  chain that stays below 85% with the lot.
+- If neither is below 85%, the less-loaded certified option is used only while it stays within the factory limit
+  (100%, configurable), with a warning.
+- If no certified option fits within the limit, the lot is **not bought**: it is marked "Needs planner review"
+  (`when_no_capacity: planner_review`). A planner can approve it, switch its factory or reject it.
+- Last-chance lots are the only exception (client: warn, don't block): they are bought and labelled
+  "Over capacity (last chance)", with a warning that extra capacity must be agreed.
 - Lead times: a requisition's own lead times are used at its supplied factory; at any other factory we use the
   midpoint of that factory's min/max range.
 - Cost = quantity × unit cost × the assigned factory's cost multiplier. Each lot also shows the cost delta versus
-  its primary factory.
+  its primary factory, and the factory load before and after the lot.
 
-Across the 100 runs: 8,799 lots, 2,936 routed to a backup, 197 with piggyback. 4,513 lots carry a capacity-conflict
-warning: total demand (17.2M units) exceeds what the six factories can produce at 85% over the period, so conflicts
-are a property of the data, made visible rather than hidden.
+Across the 23 buying windows: 7,310 lots, of which 5,268 are bought (804 on a backup, 97 with piggyback) and 2,042
+need planner review. Of the bought lots, 3,730 are below 85% with the lot, 1,381 are between 85% and the limit, and
+157 are last-chance lots over capacity. No factory week is above 100% except through those labelled last-chance
+lots (78 of 671 factory-weeks, at most 112.1%). Of the backup moves, 462 end at CN04, 254 at ID03, 80 at BD02 and
+8 at IN06. Total demand exceeds what the six factories can make, so the review queue is a property of the data,
+made visible instead of hidden.
+
+**Backup source comparison (data v5, all runs).** Walking the factory chain buys 7.11M units and leaves 4.55M for
+review; article-level backups would buy 7.61M and leave 3.98M. The chain sends most overflow towards CN04, which is
+itself the most loaded factory, while article-level backups spread it over more factories. Which one reflects
+Acme's real contracts is a client decision; both are one setting.
 
 ## 7. What-if scenarios
 
@@ -133,9 +168,9 @@ All scenarios work on a copy of one run's plan.
 | Scenario | Output |
 |---|---|
 | Hold a customer | Units removed per lot and size, NSV at risk, new lot quantity |
-| Check minimums (MOQ cascade) | Lots that fall below MOQ after a hold, with a suggested same-market piggyback fix and the recalculated quantity and RDD |
+| Check minimums (MOQ cascade) | Lots that fall below MOQ after a hold, with a suggested same-market fix. A fix never uses the held customer's own demand, reserves each requisition so no two lots claim it, and is re-checked for MOQ, MPQ (per article per factory) and factory load |
 | Delay production | Shift a factory's production by N days: new arrival dates, late lots, late units, affected customers and NSV at risk |
-| Switch factories | Certification check, cost-multiplier and lead-time deltas, new arrival date, MOQ status and target-factory load |
+| Switch factories | Certification check, cost-multiplier and lead-time deltas, new arrival date, MOQ status. Capacity is recalculated on a copy of the ledger with the lot removed from its factory and added to the target (load before and after at both), and MPQ is re-checked at both factories |
 
 ### Manual decisions (Go/No-Go)
 
@@ -144,8 +179,8 @@ changed; planner decisions are saved separately (`outputs/overrides.json`) and a
 
 | Override | Effect |
 |---|---|
-| Lot decision: Buy / No-Go / Delay | No-Go and Delay lots are left out of the exported buy plan |
-| Factory switch (certified factories only) | Cost, lead time and arrival recalculated at the new factory |
+| Lot decision: Buy / No-Go / Delay | No-Go and Delay lots are left out of the exported buy plan; Buy on a review lot approves it |
+| Factory switch (certified factories only) | Cost, lead time, arrival and the target factory's load recalculated; a warning if the target is above the threshold |
 | Customer hold (applied from the what-if tab) | That customer's units removed from every lot; a lot with nothing left becomes No-Go; lots falling below MOQ get a warning |
 
 Every changed lot is marked `decision_type = manual` with a note explaining the change, KPIs show the change
@@ -153,24 +188,34 @@ against the automatic plan, and a week can be reverted to the automatic plan in 
 
 ## 8. Pull-forward analysis (spec 3.3)
 
-For a run, the engine projects each factory's load over the current and next four monthly windows: committed lots
-from the ledger plus open demand placed at its primary factory. Windows at or above 85% generate recommendations,
-grouped by article and market: pull into the earliest lower-load window, check MOQ for that market, and show the
-extra cost of the alternative (routing to the backup in the overloaded window).
+For a run, the engine projects each factory's weekly load over the current and next four buying windows: the run's
+ledger plus open demand placed at its primary factory. Each window's load is reported as its average (units over
+capacity × weeks, using exactly the same weeks for both) and its **busiest week**. A window is flagged when its
+busiest week reaches 85%, because an average can hide one overloaded week.
+
+For each flagged window, open demand is moved one article-market group at a time, largest first, into the closest
+earlier window that can take it. Each move is tested on a working copy of the ledger that already holds the moves
+accepted before it, so recommendations never claim the same capacity. A move is accepted only if every affected week
+and the target window's busiest week stay below 85%, the market still reaches MOQ, the article reaches MPQ at the
+factory in the target window, and what stays behind is zero or still reaches MPQ. Moves stop once the window is
+back below 85%. Each recommendation reports units and the busiest week before and after, in both windows, plus the
+cost of the alternative (routing to the backup in the overloaded window).
 
 ## 9. Validation (agreed success criteria)
 
 | Check | Result |
 |---|---|
 | Valid recommendations: certified factory, single article and market, MOQ met or warned, grouping window respected | 0 violations |
-| Complete accounting: every requisition has one outcome, no requisition in two lots, units add up | Passed (24,962 requisitions, 17,175,451 units) |
+| Complete accounting: every requisition has one outcome, no requisition in two lots, units add up | Passed (25,141 requisitions, 17,554,643 units) |
+| Monthly buying: purchases committed only in buying runs | Passed (23 buying runs) |
+| Capacity: no factory week above the limit except labelled last-chance lots | Passed |
 | Correct scenarios: hand-calculated checks | Passed (tests/test_scenarios.py); worked examples in `docs/worked_examples.md` |
 | Comparison with a reference plan | See below |
 
-Tests: `pytest` runs 58 tests: rule unit tests, integration tests on the full plan, scenario hand checks,
-manual-decision tests, data checks, and headless app tests. In addition, a full app sweep exercised all
-100 weeks and every scenario (1,694 interactions) and the save, apply and revert buttons on every tenth week
-(640 interactions), with no failures.
+Tests: `pytest` runs 91 tests: rule unit tests, integration tests on the full plan, scenario hand checks,
+manual-decision tests, data checks, API tests and headless app tests. They include a test for each internal review
+finding: purchases only in buying runs, the 84% + 500-unit capacity case, held customers never used in a fix and no
+requisition reused, factory-switch load after the move, and pull-forward averages and combined moves.
 
 `docs/worked_examples.md` walks through real lots step by step (purchase window, grouping, MOQ/MPQ, capacity
 routing, piggyback, wholesale exclusion, customer hold, delay, factory switch, accounting). The script that
@@ -183,37 +228,49 @@ appears, with no rules. The agreed reference plan is still to be confirmed with 
 
 | Metric (all 100 runs) | Our plan | As-is |
 |---|---|---|
-| Units bought | 11.82M | 17.18M |
-| Production cost | $1.154B | $1.646B |
-| Cost per unit | $97.66 | $95.86 |
-| On-time share of units bought | 95.8% | 96.9% |
-| Routed to backup | 33% of lots | 58% of requisitions |
-| Unresolved units (shown separately) | 0.45M | n/a (no rules applied) |
+| Units bought | 7.11M | 17.55M |
+| Production cost | $652M | $1.773B |
+| Cost per unit | $91.62 | $100.98 |
+| On-time share of units bought | 83.2% | 98.0% |
+| Routed to backup | 15% of lots | 56% of requisitions |
+| Unresolved units (shown separately) | 0.55M | n/a (no rules applied) |
+| Units needing planner review (no capacity) | 4.55M | n/a (capacity not checked) |
 
-The as-is plan buys everything immediately and ignores MOQ (3,196 article-market lots below 300) and the wholesale
-exclusion rule, so its volumes are not comparable one to one. Our plan follows the rules and is slightly more
-expensive per unit because capacity routing does not yet look for the cheapest certified factory; that is the main
-target of the planned network optimiser.
+The as-is plan buys everything immediately, ignores MOQ (3,179 article-market lots below 300), the wholesale
+exclusion rule and factory capacity, so its volumes are not comparable one to one.
+
+Two effects of the changes are worth discussing with the client:
+
+- **Monthly buying lowers the on-time share** (83.2%, against 98.0% for the as-is plan, which buys every week). All late lots are late
+  starts: demand that arrives between two windows with an order-by date before the next window can only be
+  ordered once that date has passed. Allowing urgent demand to be bought in a weekly run would recover most of this.
+- **Respecting capacity moves 4.6M units to planner review.** Demand exceeds what the factories can make at 100%;
+  these lots need a decision (extra capacity, a third certified factory, a later date, or No-Go).
 
 ## 10. Deviations and assumptions
 
 | Topic | Choice | Why |
 |---|---|---|
 | Order of rules | Capacity routing runs after grouping | Routing needs lot quantities; certification is still enforced on every assignment |
-| Buying window | Monthly, cutoff on the 21st | Client decision (third week); configurable |
+| Buying window | Monthly; the PO day on days 15-21 | Client decision (third week); exact days are our reading, configurable |
+| Weeks between windows | Draft of the next window, nothing committed | Planners see the purchase build up; confirm |
 | Capacity source | Rolling ledger, units spread over manufacturing weeks | Client decision; the static table exceeds 100% in 336 weeks |
-| Both factories over 85% | Less-loaded factory plus warning | Open question; never blocks the plan |
-| Lots below MOQ/MPQ | Wait for the next run if production can still start on time | Avoids declaring demand unresolved too early; configurable |
+| Backup routing | Factory-level chain to CN04 (data v5) | Every supplied v5 backup assignment follows it; article-level is one setting away |
+| Capacity check | Load including the lot; factory limit 100% | Spec 3.2; the limit is configurable (overtime?) |
+| No certified factory has room | Planner review, not bought | A warning does not create capacity; last-chance lots keep warn-don't-block |
+| Lots below MOQ/MPQ | Wait for the next window if production can still start on time | Avoids declaring demand unresolved too early; configurable |
 | Last chance | Includes forecast-only demand; bought below minimums with a warning | Catalogue closure; client said warn, don't block |
 | Piggyback | Whole requisitions, same market only | Keeps accounting exact and respects per-market MOQ |
-| MPQ scope | Per article per factory per run | Spec: factory level across markets in the same window |
+| MPQ scope | Per article per factory per buying window | Spec: factory level across markets in the same window |
 | Suggested RDD | Earliest RDD in the lot, or the expected arrival if later | Gives the planner a realistic date |
 | Lead time at another factory | Midpoint of that factory's range | No per-requisition lead time exists for factories other than the supplied one |
 
 ## 11. Open questions for the client
 
-1. Article-level or factory-level backup: which is authoritative?
+1. Backup routing: data v5 follows the factory chain to CN04; article-level backups buy 0.5M more units. Which matches Acme's contracts?
 2. Rule 2: anchor on the earliest RDD, or allow chaining?
-3. When both primary and backup exceed 85%: third factory, delay, or flag?
-4. The reference plan and the weighting of cost, on-time units and unresolved demand.
-5. Delivery history or permission to use public delay data (planned extension).
+3. When no certified factory has room: planner review (current), third certified factory, delay, or buy with a warning?
+   Is 100% a hard limit, or is overtime possible?
+4. Is "third week" days 15-21? Are weekly drafts useful, and should urgent demand be bought between windows?
+5. The reference plan and the weighting of cost, on-time units and unresolved demand.
+6. Delivery history or permission to use public delay data (planned extension).

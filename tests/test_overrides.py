@@ -7,6 +7,7 @@ from tests.conftest import needs_data
 
 pytestmark = needs_data
 RUN = "MRP-WK020"
+HELD = "KEY-AMAZON"  # largest account in this run (data v5 names every DTC account)
 
 
 @pytest.fixture
@@ -16,9 +17,10 @@ def store(tmp_path):
 
 def test_no_overrides_means_automatic_plan(planner, store):
     eff = effective_lots(planner, RUN, store)
-    assert (eff["decision"] == "Buy").all()
+    assert (eff["decision"] == eff["auto_decision"]).all()
     assert (eff["decision_type"] == "auto").all()
-    assert len(effective_fact_table(planner, RUN, store)) == len(planner.results[RUN].lots)
+    lots = planner.results[RUN].lots
+    assert len(effective_fact_table(planner, RUN, store)) == (lots["auto_decision"] == "Buy").sum()
 
 
 def test_no_go_removes_lot_from_buy_plan(planner, store):
@@ -49,8 +51,8 @@ def test_uncertified_switch_is_rejected(planner, store):
 
 
 def test_customer_hold_matches_scenario(planner, store):
-    sc = scenarios.hold_customer(planner, RUN, "DTC")
-    store.hold_customer(RUN, "DTC")
+    sc = scenarios.hold_customer(planner, RUN, HELD)
+    store.hold_customer(RUN, HELD)
     eff = effective_lots(planner, RUN, store).set_index("lot_id")
     for row in sc["lots"].itertuples():
         assert eff.loc[row.lot_id, "consolidated_qty"] == row.qty_after
@@ -61,7 +63,7 @@ def test_customer_hold_matches_scenario(planner, store):
 def test_overrides_persist_and_revert(planner, store, tmp_path):
     lot = planner.results[RUN].lots["lot_id"].iloc[0]
     store.set_lot(planner, RUN, lot, "Delay")
-    store.hold_customer(RUN, "DTC")
+    store.hold_customer(RUN, HELD)
     reloaded = OverrideStore(tmp_path / "overrides.json")
     assert reloaded.count(RUN) == 2
     reloaded.reset(RUN)
@@ -70,6 +72,26 @@ def test_overrides_persist_and_revert(planner, store, tmp_path):
 
 def test_engine_plan_is_never_modified(planner, store):
     before = planner.results[RUN].lots.copy()
-    store.hold_customer(RUN, "DTC")
+    store.hold_customer(RUN, HELD)
     effective_lots(planner, RUN, store)
     assert planner.results[RUN].lots.equals(before)
+
+
+def test_draft_weeks_cannot_be_decided(planner, store):
+    lot = planner.results["MRP-WK021"].lots["lot_id"].iloc[0]
+    with pytest.raises(ValueError, match="draft"):
+        store.set_lot(planner, "MRP-WK021", lot, "No-Go")
+
+
+def test_review_lot_waits_for_a_planner_and_can_be_approved(planner, store):
+    run = next(r for r in planner.buying_runs() if (planner.results[r].lots["auto_decision"] == "Review").any())
+    lot = planner.results[run].lots.query("auto_decision == 'Review'").iloc[0]
+    eff = effective_lots(planner, run, store).set_index("lot_id")
+    assert eff.loc[lot["lot_id"], "decision"] == "Review"
+    assert lot["lot_id"] not in set(effective_fact_table(planner, run, store)["suggestion_id"].str[4:])
+    store.set_lot(planner, run, lot["lot_id"], "Buy")
+    eff = effective_lots(planner, run, store).set_index("lot_id")
+    assert eff.loc[lot["lot_id"], "decision"] == "Buy" and eff.loc[lot["lot_id"], "decision_type"] == "manual"
+    assert lot["lot_id"] in set(effective_fact_table(planner, run, store)["suggestion_id"].str[4:])
+    store.revert_lot(run, lot["lot_id"])
+    assert effective_lots(planner, run, store).set_index("lot_id").loc[lot["lot_id"], "decision"] == "Review"

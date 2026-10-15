@@ -1,6 +1,6 @@
 import type {
-  Checks, Customer, DelayResult, Decision, Factory, Features, HoldResult, LotRequisition, Overrides, Plan,
-  PullForward, CapacityRow, Requisition, Run, Settings, SwapResult,
+  Checks, Customer, DelayResult, LotDecision, Factory, Features, HoldResult, LotRequisition, Overrides, Plan,
+  PullForward, CapacityRow, Requisition, Run, Settings, SwapResult, TrendPoint, Network,
 } from "./types";
 
 // Dev uses the Vite proxy (/api -> :8000). The built app is served by the API itself (same origin).
@@ -36,6 +36,8 @@ export const api = {
   settings: () => request<Settings>("/settings"),
   dataIssues: () => request<string[]>("/data-issues"),
   checks: () => request<Checks>("/checks"),
+  trend: () => request<TrendPoint[]>("/trend"),
+  network: (run: string) => request<Network>(`/network/${run}`),
   features: () => request<Features>("/features"),
   pullForward: (run: string) => request<PullForward>(`/pull-forward/${run}`),
   capacity: (run: string) => request<CapacityRow[]>(`/capacity/${run}`),
@@ -48,7 +50,7 @@ export const api = {
     request<SwapResult>("/scenario", { method: "POST", ...body({ run_id: run, type: "swap", lot_id, target_factory }) }),
 
   overrides: (run: string) => request<Overrides>(`/overrides/${run}`),
-  setLot: (run: string, lot: string, decision: Decision, factory: string | null, note: string) =>
+  setLot: (run: string, lot: string, decision: LotDecision, factory: string | null, note: string) =>
     request<Overrides>(`/overrides/${run}/lots/${lot}`, { method: "PUT", ...body({ decision, factory, note }) }),
   revertLot: (run: string, lot: string) => request<Overrides>(`/overrides/${run}/lots/${lot}`, { method: "DELETE" }),
   hold: (run: string, customer_id: string) =>

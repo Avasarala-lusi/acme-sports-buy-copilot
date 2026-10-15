@@ -34,6 +34,13 @@ class CapacityLedger:
         cap = self.capacity[factory]
         return max(self.units[factory][w] / cap * 100 for w in weeks)
 
+    def utilization_with(self, factory: str, start, mfg_days: int, qty: float) -> float:
+        """Highest utilisation (%) over the lot's production weeks if the lot were added."""
+        weeks = self.weeks_for(start, mfg_days)
+        per_week = qty / len(weeks)
+        cap = self.capacity[factory]
+        return max((self.units[factory][w] + per_week) / cap * 100 for w in weeks)
+
     def add(self, factory: str, start, mfg_days: int, qty: float) -> None:
         weeks = self.weeks_for(start, mfg_days)
         per_week = qty / len(weeks)

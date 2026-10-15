@@ -2,10 +2,12 @@ import React, { Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
 import { HashRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import "@fontsource-variable/inter";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./index.css";
 import { Layout } from "./components/Layout";
 import { RunProvider } from "./lib/run";
+import { ThemeProvider } from "./lib/theme";
 import { BuyPlan } from "./pages/BuyPlan";
 import { WhatIf } from "./pages/WhatIf";
 import { PullForward } from "./pages/PullForward";
@@ -16,6 +18,8 @@ import { Loading } from "./components/ui";
 
 // The chart library is large; load the capacity page only when it is opened.
 const Capacity = lazy(() => import("./pages/Capacity").then((m) => ({ default: m.Capacity })));
+// The globe (three.js) is larger still; load it only on the network page.
+const Network = lazy(() => import("./pages/Network").then((m) => ({ default: m.Network })));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 30_000 } },
@@ -24,6 +28,7 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
       <RunProvider>
         <HashRouter>
           <Routes>
@@ -32,6 +37,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="what-if" element={<WhatIf />} />
               <Route path="pull-forward" element={<PullForward />} />
               <Route path="capacity" element={<Suspense fallback={<Loading />}><Capacity /></Suspense>} />
+              <Route path="network" element={<Suspense fallback={<Loading />}><Network /></Suspense>} />
               <Route path="export" element={<Export />} />
               <Route path="checks" element={<Checks />} />
               <Route path="planned" element={<Planned />} />
@@ -39,6 +45,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           </Routes>
         </HashRouter>
       </RunProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

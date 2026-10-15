@@ -24,7 +24,7 @@ def app():
 def test_week_renders(app, week_index):
     app.sidebar.selectbox[0].select_index(week_index).run()
     assert not app.exception, app.exception
-    assert app.metric[0].label == "Lots to buy"
+    assert app.metric[0].label in {"Lots to buy", "Lots in draft"}
 
 
 @pytest.mark.parametrize("scenario", ["Hold a customer", "Delay production", "Switch factories"])

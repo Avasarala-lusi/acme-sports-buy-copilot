@@ -45,15 +45,15 @@ export function DataTable<T>({ rows, columns, rowKey, onRowClick, selectedKey, m
     setSort((s) => (s?.key === key ? (s.dir === 1 ? { key, dir: -1 } : null) : { key, dir: 1 }));
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-panel">
+    <div className="overflow-hidden rounded-2xl border border-line bg-panel shadow-[var(--shadow-card)]">
       <div className="scroll-thin overflow-auto" style={{ maxHeight }}>
         <table className="w-full border-collapse text-sm">
-          <thead className="sticky top-0 z-10 bg-sidebar/95 backdrop-blur">
+          <thead className="sticky top-0 z-10 bg-panel/90 backdrop-blur">
             <tr>
               {columns.map((c) => (
                 <th key={c.key} style={{ width: c.width }} title={c.title}
                   onClick={() => toggle(c.key)}
-                  className={cx("cursor-pointer select-none whitespace-nowrap border-b border-line px-3 py-2 text-xs font-medium text-muted hover:text-ink",
+                  className={cx("cursor-pointer select-none whitespace-nowrap border-b border-line px-3 py-3 font-mono text-[10.5px] font-normal uppercase tracking-[0.08em] text-faint hover:text-ink",
                     c.align === "right" ? "text-right" : c.align === "center" ? "text-center" : "text-left")}>
                   <span className="inline-flex items-center gap-1">
                     {c.header}
@@ -68,11 +68,11 @@ export function DataTable<T>({ rows, columns, rowKey, onRowClick, selectedKey, m
               const k = rowKey(r);
               return (
                 <tr key={k} onClick={onRowClick ? () => onRowClick(r) : undefined}
-                  className={cx("border-b border-line/70 last:border-0", onRowClick && "cursor-pointer hover:bg-canvas",
-                    selectedKey === k && "bg-accent-soft/60 hover:bg-accent-soft/60")}>
+                  className={cx("border-b border-line/60 transition-colors last:border-0", onRowClick && "cursor-pointer hover:bg-sidebar/70",
+                    selectedKey === k && "bg-accent-soft hover:bg-accent-soft")}>
                   {columns.map((c) => (
                     <td key={c.key}
-                      className={cx("whitespace-nowrap px-3 py-2", c.align === "right" ? "text-right tabular-nums" : c.align === "center" ? "text-center" : "text-left")}>
+                      className={cx("whitespace-nowrap px-3 py-3 text-[13px]", c.align === "right" ? "text-right tabular-nums" : c.align === "center" ? "text-center" : "text-left")}>
                       {c.render ? c.render(r) : String((r as Record<string, unknown>)[c.key] ?? "—")}
                     </td>
                   ))}
@@ -83,7 +83,7 @@ export function DataTable<T>({ rows, columns, rowKey, onRowClick, selectedKey, m
         </table>
         {rows.length === 0 && <div className="p-8 text-center text-sm text-muted">{emptyText}</div>}
       </div>
-      <div className="flex items-center justify-between border-t border-line bg-sidebar/60 px-3 py-2 text-xs text-muted">
+      <div className="flex items-center justify-between border-t border-line px-4 py-2.5 text-xs text-faint">
         <span>{Math.min(limit, rows.length).toLocaleString()} of {rows.length.toLocaleString()} rows</span>
         {limit < rows.length && (
           <button className="font-medium text-accent hover:underline" onClick={() => setLimit((l) => l + pageSize)}>Show more</button>

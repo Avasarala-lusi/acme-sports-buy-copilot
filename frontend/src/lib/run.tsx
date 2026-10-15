@@ -8,6 +8,9 @@ interface RunContextValue {
   run: Run | undefined;
   runId: string;
   setRunId: (id: string) => void;
+  /** a lot to open in the buy plan (set by the command palette) */
+  openLot: string | null;
+  setOpenLot: (id: string | null) => void;
 }
 
 const RunContext = createContext<RunContextValue | null>(null);
@@ -31,8 +34,9 @@ export function RunProvider({ children }: { children: ReactNode }) {
     }
   }, [runId]);
 
+  const [openLot, setOpenLot] = useState<string | null>(null);
   const run = runs.find((r) => r.run_id === runId);
-  return <RunContext.Provider value={{ runs, run, runId, setRunId }}>{children}</RunContext.Provider>;
+  return <RunContext.Provider value={{ runs, run, runId, setRunId, openLot, setOpenLot }}>{children}</RunContext.Provider>;
 }
 
 export function useRun() {

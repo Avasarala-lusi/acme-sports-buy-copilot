@@ -19,13 +19,13 @@ from engine import pull_forward
 from engine.accounting import accounting_report, rule_violations
 from engine.metrics import comparison_table
 from engine.output import fact_buy_plan_suggestions, get_planner
-from engine.overrides import DECISIONS, OverrideStore, effective_fact_table, effective_lots
-from engine.planner import FUTURE_FORECAST, OPEN, UNRESOLVED_MOQ, UNRESOLVED_MPQ
+from engine.overrides import OverrideStore, effective_fact_table, effective_lots, ensure_decidable
+from engine.planner import FUTURE_FORECAST, OPEN, PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ
 from engine.settings_info import settings_items, thresholds
 from sim import scenarios
 
 ROOT = Path(__file__).resolve().parent.parent
-app = FastAPI(title="Acme Sports Buy Planner API", version="0.2.0")
+app = FastAPI(title="Acme Sports Buy Planner API", version="0.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -54,8 +54,10 @@ def _check_run(run_id: str):
 
 def _kpis(lots: pd.DataFrame, outcomes: pd.DataFrame) -> dict:
     p = planner()
-    if "decision" in lots:
-        lots = lots[(lots["decision"] == "Buy") & (lots["consolidated_qty"] > 0)]
+    decision = "decision" if "decision" in lots else "auto_decision"
+    review = lots[lots[decision] == "Review"] if len(lots) else lots
+    if len(lots):
+        lots = lots[(lots[decision] == "Buy") & (lots["consolidated_qty"] > 0)]
     units = float(lots["consolidated_qty"].sum()) if len(lots) else 0.0
     cost = float(lots["total_cost_usd"].sum()) if len(lots) else 0.0
     on_time = float(lots["on_time_units"].sum()) if len(lots) else 0.0
@@ -69,7 +71,20 @@ def _kpis(lots: pd.DataFrame, outcomes: pd.DataFrame) -> dict:
         "lots_with_warnings": int((lots["warnings"] != "").sum()) if len(lots) else 0,
         "unresolved_units": qty([UNRESOLVED_MOQ, UNRESOLVED_MPQ]),
         "forecast_excluded_units": qty([FUTURE_FORECAST]),
+        "review_lots": int(len(review)),
+        "review_units": float(review["consolidated_qty"].sum()) if len(review) else 0.0,
     }
+
+
+def _window_info(run_id: str) -> dict:
+    p = planner()
+    r = p.run_result(run_id)
+    po = pd.to_datetime(p.runs["po_execution_date"]).dt.normalize()
+    commit = p.runs.loc[po == r.buy_date, "run_id"]
+    return {"is_buying_run": r.is_buying_run, "plan_status": r.plan_status,
+            "buying_window": f"WIN-{r.buy_date:%Y-%m}", "buy_date": r.buy_date.isoformat(),
+            "next_buy_date": r.next_buy_date.isoformat(),
+            "buying_run_id": commit.iloc[0] if len(commit) else None}
 
 
 # ------------------------------------------------------------------ reference data
@@ -83,7 +98,10 @@ def runs():
     cols = ["run_id", "week_number", "mrp_freeze_datetime_utc", "as_is_plan_date", "go_nogo_date",
             "po_execution_date", "factory_transmission_date", "factory_confirm_deadline",
             "season", "range_version", "quarter"]
-    return _records(planner().runs[cols])
+    p = planner()
+    out = p.runs[cols].copy()
+    out["is_buying_run"] = out["run_id"].isin(p.buying_runs())
+    return _records(out)
 
 
 @app.get("/factories")
@@ -131,15 +149,39 @@ def plan(run_id: str):
     p, s = planner(), store()
     r = p.run_result(run_id)
     eff = effective_lots(p, run_id, s)
-    eff["certified_factories"] = eff["article_id"].map(lambda a: sorted(p.certified[a]))
-    return {"run_id": run_id,
-            "kpis": _kpis(eff, r.outcomes),
+    if len(eff):
+        eff["certified_factories"] = eff["article_id"].map(lambda a: sorted(p.certified[a]))
+    outcome = r.outcomes["outcome"] if len(r.outcomes) else pd.Series(dtype=str)
+    k = _kpis(eff, r.outcomes)
+    waiting_units = float(p.prs.loc[r.open_prs, "requested_qty"].sum()) if r.open_prs else 0.0
+    return {"run_id": run_id, **_window_info(run_id),
+            "kpis": k,
             "kpis_automatic": _kpis(r.lots, r.outcomes),
+            "units": {"bought": k["units_bought"], "review": k["review_units"], "unresolved": k["unresolved_units"],
+                      "future": k["forecast_excluded_units"], "waiting": waiting_units},
             "manual_changes": s.count(run_id),
-            "counts": {"unresolved": int(r.outcomes["outcome"].isin([UNRESOLVED_MOQ, UNRESOLVED_MPQ]).sum()),
-                       "future": int((r.outcomes["outcome"] == FUTURE_FORECAST).sum()),
+            "counts": {"unresolved": int(outcome.isin([UNRESOLVED_MOQ, UNRESOLVED_MPQ]).sum()),
+                       "future": int((outcome == FUTURE_FORECAST).sum()),
+                       "review": int((outcome == PLANNER_REVIEW).sum()),
                        "waiting": len(r.open_prs)},
             "lots": _records(eff)}
+
+
+@lru_cache
+def _trend():
+    """Automatic-plan KPIs for every buying window, for the trend lines on the buy plan."""
+    p = planner()
+    rows = []
+    for run_id in p.buying_runs():
+        r = p.run_result(run_id)
+        k = _kpis(r.lots, r.outcomes)
+        rows.append({"run_id": run_id, "buying_window": f"WIN-{r.buy_date:%Y-%m}", **k})
+    return rows
+
+
+@app.get("/trend")
+def trend():
+    return _trend()
 
 
 @app.get("/runs/{run_id}/requisitions")
@@ -151,9 +193,12 @@ def run_requisitions(run_id: str, status: str = Query(..., pattern="^(unresolved
     if status == "waiting":
         df = p.prs.loc[r.open_prs, cols + ["release_primary"]].reset_index(drop=True) if r.open_prs \
             else pd.DataFrame(columns=cols)
-        df["outcome"], df["reason"] = OPEN, "Not yet due; carried to later runs"
+        df["outcome"] = OPEN
+        df["reason"] = [p.open_reason(x, run_id) for x in df["pr_id"]] if len(df) else []
         return _records(df)
     kinds = [UNRESOLVED_MOQ, UNRESOLVED_MPQ] if status == "unresolved" else [FUTURE_FORECAST]
+    if r.outcomes.empty:
+        return []
     out = r.outcomes[r.outcomes["outcome"].isin(kinds)][["pr_id", "outcome", "reason"]]
     return _records(out.merge(p.prs[cols].reset_index(drop=True), on="pr_id"))
 
@@ -163,10 +208,14 @@ def run_customers(run_id: str):
     _check_run(run_id)
     p = planner()
     lots = p.run_result(run_id).lots
-    ids = lots["pr_ids"].str.split(",").explode() if len(lots) else pd.Series(dtype=str)
+    ids = lots["pr_ids"].str.split(",").explode() if len(lots) else pd.Series(dtype=str, index=[])
+    if ids.empty:
+        return []
     counts = p.prs.loc[ids, "customer_id"].dropna().value_counts()
-    ratings = p.data.customers.set_index("customer_id")["credit_rating"]
-    return [{"customer_id": c, "credit_rating": ratings.get(c), "n_prs": int(n)} for c, n in counts.items()]
+    cust = p.data.customers.set_index("customer_id")
+    col = lambda c: cust[c] if c in cust else pd.Series(dtype=object)
+    return [{"customer_id": c, "name": col("name").get(c), "segment": col("segment").get(c),
+             "credit_rating": col("credit_rating").get(c), "n_prs": int(n)} for c, n in counts.items()]
 
 
 @app.get("/lots/{run_id}/{lot_id}/requisitions")
@@ -227,8 +276,6 @@ def get_overrides(run_id: str):
 @app.put("/overrides/{run_id}/lots/{lot_id}")
 def set_lot_decision(run_id: str, lot_id: str, body: LotDecision):
     _check_run(run_id)
-    if body.decision not in DECISIONS:
-        raise HTTPException(400, f"decision must be one of {DECISIONS}")
     try:
         store().set_lot(planner(), run_id, lot_id, body.decision, body.factory, body.note)
     except (ValueError, KeyError) as e:
@@ -239,13 +286,17 @@ def set_lot_decision(run_id: str, lot_id: str, body: LotDecision):
 @app.delete("/overrides/{run_id}/lots/{lot_id}")
 def revert_lot(run_id: str, lot_id: str):
     _check_run(run_id)
-    store().set_lot(planner(), run_id, lot_id, "Buy", None, "")
+    store().revert_lot(run_id, lot_id)
     return get_overrides(run_id)
 
 
 @app.post("/overrides/{run_id}/holds")
 def add_hold(run_id: str, body: Hold):
     _check_run(run_id)
+    try:
+        ensure_decidable(planner(), run_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     store().hold_customer(run_id, body.customer_id)
     return get_overrides(run_id)
 
@@ -287,6 +338,34 @@ def capacity(run_id: str, weeks_before: int = 4, weeks_after: int = 36):
     start = pd.Timestamp(p.runs.set_index("run_id").loc[run_id, "mrp_freeze_datetime_utc"]).normalize()
     t = t[(t["week"] >= start - pd.Timedelta(weeks=weeks_before)) & (t["week"] <= start + pd.Timedelta(weeks=weeks_after))]
     return _records(t)
+
+
+@app.get("/network/{run_id}")
+def network(run_id: str):
+    """Factory -> market routes for the week's lots (after manual decisions), for the network map."""
+    _check_run(run_id)
+    p, s = planner(), store()
+    eff = effective_lots(p, run_id, s)
+    eff = eff[eff["consolidated_qty"] > 0] if len(eff) else eff
+    routes = []
+    if len(eff):
+        eff = eff.assign(status=eff["decision"].map(lambda d: "review" if d == "Review" else ("bought" if d == "Buy" else "held")))
+        eff = eff[eff["status"] != "held"]
+        for (f, m), g in eff.groupby(["assigned_factory", "market_destination"]):
+            bought = g[g["status"] == "bought"]
+            routes.append({
+                "factory_id": f, "market": m, "lots": int(len(g)), "units": float(g["consolidated_qty"].sum()),
+                "bought_units": float(bought["consolidated_qty"].sum()),
+                "backup_units": float(bought.loc[bought["backup_routed"], "consolidated_qty"].sum()),
+                "review_units": float(g.loc[g["status"] == "review", "consolidated_qty"].sum()),
+                "cost_usd": float(bought["total_cost_usd"].sum()),
+                "on_time_units": float(bought["on_time_units"].sum()),
+                "late_lots": int((~bought["on_time"]).sum()),
+                "articles": int(g["article_id"].nunique()),
+                "max_load_pct": float(g["util_after_pct"].max()),
+            })
+    fac = p.factories.reset_index()[["factory_id", "country", "weekly_capacity_units", "cost_multiplier"]]
+    return {"run_id": run_id, "routes": sorted(routes, key=lambda r: -r["units"]), "factories": _records(fac)}
 
 
 # ------------------------------------------------------------------ export

@@ -1,27 +1,125 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --color-canvas: #fafaf7;
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Light theme tokens. Every component uses these roles, so the dark theme only redefines them. */
+@theme static {
+  --font-sans: "Geist Variable", "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* light theme */
+  --color-canvas: #f7f7f8;
   --color-panel: #ffffff;
-  --color-sidebar: #f3f2ed;
-  --color-line: #e7e4dc;
-  --color-line-strong: #d6d2c6;
-  --color-ink: #13202e;
-  --color-muted: #5e6975;
-  --color-faint: #8a939c;
-  --color-accent: #b04812;
-  --color-accent-soft: #fbe9dd;
-  --color-good: #1f7a4d;
-  --color-good-soft: #e3f4ea;
-  --color-bad: #b42318;
-  --color-bad-soft: #fde8e6;
-  --color-warn: #946200;
-  --color-warn-soft: #fdf2d6;
-  --color-info: #1d5fa8;
-  --color-info-soft: #e5eefa;
-  --color-manual: #6b3fa0;
-  --color-manual-soft: #efe7f8;
+  --color-sidebar: #f1f1f3;
+  --color-line: #e6e6ea;
+  --color-line-strong: #d4d4da;
+  --color-ink: #0c0c0f;
+  --color-muted: #5f5f6a;
+  --color-faint: #8d8d98;
+
+  --color-accent: #0f9f84;
+  --color-accent-2: #7c5cf6;
+  --color-accent-soft: #e2f6f1;
+
+  --color-good: #12803f;
+  --color-good-soft: #e5f6ec;
+  --color-bad: #d02f2f;
+  --color-bad-soft: #fdeceb;
+  --color-warn: #a35f00;
+  --color-warn-soft: #fff4dc;
+  --color-info: #2a6fc9;
+  --color-info-soft: #e7f0fc;
+  --color-manual: #8b5cf6;
+  --color-manual-soft: #f1ecff;
+
+  /* KPI tones (one hue per card, never reused for another meaning on the same card) */
+  --color-tone-green: #16a34a;
+  --color-tone-amber: #d97706;
+  --color-tone-violet: #7c3aed;
+  --color-tone-blue: #2563eb;
+  --color-tone-teal: #0d9488;
+  --color-tone-rose: #e11d48;
+
+  /* charts: reference categorical palette (validated), status steps, chrome */
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+  --color-series-5: #e87ba4;
+  --color-series-6: #008300;
+  --color-status-good: #0ca30c;
+  --color-status-warning: #fab219;
+  --color-status-serious: #ec835a;
+  --color-status-critical: #d03b3b;
+  --color-grid: #e7e7ea;
+  --color-axis: #898781;
+
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05);
+  --shadow-pop: 0 16px 48px -12px rgb(16 24 40 / 0.3);
+
+  --animate-fade-up: fade-up 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-slide-in: slide-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes slide-in {
+    from { transform: translateX(32px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes shimmer {
+    from { background-position: -400px 0; }
+    to { background-position: 400px 0; }
+  }
+}
+
+/* dark "control room" theme (default) */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-canvas: #09090b;
+  --color-panel: #0f0f12;
+  --color-sidebar: #16161a;
+  --color-line: #1f1f24;
+  --color-line-strong: #2c2c33;
+  --color-ink: #ececf1;
+  --color-muted: #9b9ba6;
+  --color-faint: #63636e;
+
+  --color-accent: #2dd4b4;
+  --color-accent-2: #8b5cf6;
+  --color-accent-soft: #0e2622;
+
+  --color-good: #34d399;
+  --color-good-soft: #0d241b;
+  --color-bad: #f87171;
+  --color-bad-soft: #2a1213;
+  --color-warn: #fbbf24;
+  --color-warn-soft: #2a2010;
+  --color-info: #60a5fa;
+  --color-info-soft: #0f1d33;
+  --color-manual: #c4b5fd;
+  --color-manual-soft: #1d1733;
+
+  --color-tone-green: #22c55e;
+  --color-tone-amber: #f59e0b;
+  --color-tone-violet: #a78bfa;
+  --color-tone-blue: #60a5fa;
+  --color-tone-teal: #2dd4b4;
+  --color-tone-rose: #fb7185;
+
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
+  --color-series-6: #008300;
+  --color-grid: #1d1d22;
+  --color-axis: #898781;
+
+  --shadow-card: 0 0 0 0 transparent;
+  --shadow-pop: 0 24px 64px -12px rgb(0 0 0 / 0.8);
 }
 
 html,
@@ -32,7 +130,13 @@ body,
 
 body {
   @apply bg-canvas text-ink font-sans antialiased;
-  font-feature-settings: "tnum" 1, "cv11" 1;
+  font-feature-settings: "cv11" 1, "ss01" 1;
+}
+
+.tabular,
+td,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 .scroll-thin::-webkit-scrollbar {
@@ -42,4 +146,62 @@ body {
 .scroll-thin::-webkit-scrollbar-thumb {
   background: var(--color-line-strong);
   border-radius: 8px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* soft accent glow behind the page header */
+.page-glow {
+  background:
+    radial-gradient(700px 220px at 10% 0%, color-mix(in oklab, var(--color-accent) 9%, transparent), transparent 70%),
+    radial-gradient(600px 200px at 90% 0%, color-mix(in oklab, var(--color-accent-2) 8%, transparent), transparent 70%);
+}
+
+/* Vapi-style tinted card: set --tone on the element */
+.glow-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in oklab, var(--tone) 22%, var(--color-line));
+  background:
+    radial-gradient(120% 90% at 0% 0%, color-mix(in oklab, var(--tone) 16%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in oklab, var(--tone) 7%, var(--color-panel)), var(--color-panel));
+  transition: border-color 0.2s, transform 0.2s;
+}
+.glow-card:hover {
+  border-color: color-mix(in oklab, var(--tone) 45%, var(--color-line));
+}
+.glow-line {
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--tone) 70%, transparent));
+}
+.font-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.dot-grid {
+  background-image: radial-gradient(color-mix(in oklab, var(--color-ink) 7%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.text-gradient {
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--color-sidebar) 0px, var(--color-line) 120px, var(--color-sidebar) 240px);
+  background-size: 800px 100%;
+  animation: var(--animate-shimmer);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

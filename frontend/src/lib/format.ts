@@ -23,6 +23,10 @@ export const moneyShort = (n: number | null | undefined) => {
 
 export const pct = (n: number | null | undefined, digits = 1) => (n == null ? "—" : `${n.toFixed(digits)}%`);
 
+// Factory load: one decimal near the 100% limit, so 100.4% never reads as 100%.
+export const load = (n: number | null | undefined) =>
+  n == null ? "—" : `${n.toFixed(n >= 99.5 && n < 101 ? 1 : 0)}%`;
+
 // The API sends naive timestamps that are already UTC; read them as UTC so days don't shift.
 const parse = (iso: string) => new Date(/([zZ]|[+-]\d\d:?\d\d)$/.test(iso) ? iso : `${iso}Z`);
 

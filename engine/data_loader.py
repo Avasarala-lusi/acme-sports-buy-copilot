@@ -98,16 +98,58 @@ def validate(data: AcmeData) -> list[str]:
                       "the planner uses its own rolling ledger instead")
 
     so, customers = data.sales_orders, data.customers
-    unknown = ~so["customer_id"].isin(customers["customer_id"])
+    known = set(customers["customer_id"])
+    if "customer_id" in prs:
+        unknown = ~prs["customer_id"].isin(known)
+        if unknown.any():
+            issues.append(f"prs: {unknown.sum():,} rows reference unknown customers")
+        both = so.merge(prs[["pr_id", "customer_id"]], on="pr_id", suffixes=("", "_pr"))
+        mismatch = (both["customer_id"] != both["customer_id_pr"]).sum()
+        if mismatch:
+            issues.append(f"sales_orders: {mismatch:,} orders name a different customer than their requisition")
+    unknown = ~so["customer_id"].isin(known)
     if unknown.any():
-        dtc = so.loc[unknown, "customer_id"].str.startswith("DTC").sum()
-        issues.append(f"sales_orders: {unknown.sum():,} orders have no customer record ({dtc:,} are DTC); "
-                      "DTC is treated as one customer (client decision)")
+        issues.append(f"sales_orders: {unknown.sum():,} orders have no customer record")
 
     c_rated = customers.loc[customers["credit_rating"] == "C", "customer_id"]
     if len(c_rated) and not so["customer_id"].isin(c_rated).any():
         issues.append(f"customers: the {len(c_rated)} C-rated customers have no sales orders, "
                       "so C-rated exposure is $0")
+
+    issues += _backup_findings(data)
+
+    # a customer may serve several markets (data v5 'markets', e.g. MX|US)
+    served = customers.set_index("customer_id")
+    served = (served["markets"] if "markets" in served else served["market"]).astype(str).str.split("|")
+    orders = so.merge(prs[["pr_id", "market_destination"]].rename(columns={"market_destination": "dest"}), on="pr_id")
+    outside = [d not in served.get(c, [d]) for c, d in zip(orders["customer_id"], orders["dest"])]
+    share = sum(outside) / len(orders) if len(orders) else 0
+    if share > 0:
+        issues.append(f"sales_orders: for {share:.0%} of orders the destination is not a market the customer serves; "
+                      "destination is used")
+
+    return issues
+
+
+def _backup_findings(data: AcmeData) -> list[str]:
+    """Factory-level backup chain (loops, end point) and its agreement with article-level backups."""
+    issues = []
+    chain = data.factories.set_index("factory_id")["backup_factory"].dropna().to_dict()
+    loops = set()
+    for start in chain:
+        seen, f = [], start
+        while f in chain and f not in seen:
+            seen.append(f)
+            f = chain[f]
+        if f in seen:
+            loop = seen[seen.index(f):]
+            loops.add(" → ".join(loop + [loop[0]]))
+    if loops:
+        issues.append("factories: factory-level backups form a loop (" + "; ".join(sorted(loops)) + ")")
+    ends = sorted(set(data.factories["factory_id"]) - set(chain))
+    if ends and not loops:
+        issues.append(f"factories: factory-level backup chain has no loops and ends at {', '.join(ends)} "
+                      "(last resort, no backup of its own)")
 
     arts = data.articles.merge(
         data.factories[["factory_id", "backup_factory"]].rename(
@@ -116,13 +158,5 @@ def validate(data: AcmeData) -> list[str]:
     differ = (arts["backup_factory"] != arts["factory_level_backup"]).sum()
     if differ:
         issues.append(f"articles: article-level and factory-level backups differ for {differ} of "
-                      f"{len(arts)} articles; article-level is used (open question)")
-
-    wholesale = so.merge(customers[["customer_id", "market"]], on="customer_id").merge(
-        prs[["pr_id", "market_destination"]], on="pr_id")
-    mismatch = (wholesale["market"] != wholesale["market_destination"]).mean()
-    if mismatch > 0:
-        issues.append(f"sales_orders: for {mismatch:.0%} of wholesale orders the customer's home market "
-                      "differs from the requisition's destination; destination is used")
-
+                      f"{len(arts)} articles; which one is used is the backup_source setting (open question)")
     return issues

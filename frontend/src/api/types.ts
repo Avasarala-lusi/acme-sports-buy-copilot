@@ -12,13 +12,22 @@ export interface Run {
   season: string;
   range_version: string;
   quarter: string;
+  is_buying_run: boolean;
 }
 
 export type Decision = "Buy" | "No-Go" | "Delay";
+export type LotDecision = Decision | "Review";
 
 export interface Lot {
   lot_id: string;
   run_id: string;
+  plan_status: "Committed" | "Draft";
+  buying_window: string;
+  auto_decision: "Buy" | "Review";
+  capacity_status: string;
+  util_before_pct: number;
+  util_after_pct: number;
+  mfg_days: number;
   article_id: string;
   category: "footwear" | "apparel";
   market_destination: string;
@@ -43,7 +52,7 @@ export interface Lot {
   is_piggyback_applied: boolean;
   piggyback_source_window: string | null;
   last_chance: boolean;
-  decision: Decision;
+  decision: LotDecision;
   decision_type: "auto" | "manual";
   override_note: string;
   reason: string;
@@ -62,14 +71,23 @@ export interface Kpis {
   lots_with_warnings: number;
   unresolved_units: number;
   forecast_excluded_units: number;
+  review_lots: number;
+  review_units: number;
 }
 
 export interface Plan {
   run_id: string;
+  is_buying_run: boolean;
+  plan_status: "Committed" | "Draft";
+  buying_window: string;
+  buy_date: string;
+  next_buy_date: string;
+  buying_run_id: string | null;
   kpis: Kpis;
   kpis_automatic: Kpis;
   manual_changes: number;
-  counts: { unresolved: number; future: number; waiting: number };
+  counts: { unresolved: number; future: number; review: number; waiting: number };
+  units: { bought: number; review: number; unresolved: number; future: number; waiting: number };
   lots: Lot[];
 }
 
@@ -96,6 +114,8 @@ export interface LotRequisition {
 
 export interface Customer {
   customer_id: string;
+  name: string | null;
+  segment: string | null;
   credit_rating: string | null;
   n_prs: number;
 }
@@ -118,6 +138,7 @@ export interface HoldLot {
   lot_id: string;
   article_id: string;
   market_destination: string;
+  assigned_factory: string;
   qty_before: number;
   qty_removed: number;
   qty_after: number;
@@ -125,7 +146,13 @@ export interface HoldLot {
   suggested_rdd: string;
   moq_ok: boolean;
   fix: string | null;
+  pulled_pr_ids: string;
   qty_after_fix: number;
+  moq_ok_after_fix: boolean;
+  mpq: number;
+  factory_total_after: number;
+  mpq_ok_after_fix: boolean;
+  factory_load_after_pct: number | null;
 }
 
 export interface HoldResult {
@@ -174,12 +201,29 @@ export type SwapResult =
       arrival_after: string;
       on_time_after: boolean;
       moq_still_met: boolean;
+      target_load_before_pct: number;
       target_utilization_pct: number;
+      source_load_before_pct: number;
+      source_load_after_pct: number;
       capacity_warning: boolean;
+      over_capacity: boolean;
+      mpq: number;
+      source_total_after: number;
+      target_total_after: number;
+      mpq_source_ok: boolean;
+      mpq_target_ok: boolean;
     };
 
 export interface PullForward {
-  windows: { window: string; window_start: string; factory_id: string; units: number; avg_utilization_pct: number }[];
+  windows: {
+    window: string;
+    window_start: string;
+    factory_id: string;
+    units: number;
+    weeks: number;
+    avg_utilization_pct: number;
+    peak_utilization_pct: number;
+  }[];
   recommendations: {
     factory_id: string;
     overloaded_window: string;
@@ -191,9 +235,15 @@ export interface PullForward {
     recommendation: string;
     target_window: string | null;
     days_earlier: number;
+    capacity_ok: boolean;
     moq_ok_for_market: boolean;
-    backup_factory: string;
-    extra_cost_if_routed_to_backup_usd: number;
+    mpq_target_ok: boolean;
+    mpq_source_ok: boolean;
+    source_peak_after_pct: number;
+    target_peak_before_pct: number | null;
+    target_peak_after_pct: number | null;
+    backup_factory: string | null;
+    extra_cost_if_routed_to_backup_usd: number | null;
     actionable: boolean;
   }[];
 }
@@ -223,6 +273,7 @@ export interface Settings {
     mpq_apparel: number;
     mpq_footwear: number;
     backup_threshold_pct: number;
+    hard_limit_pct: number;
     piggyback_tolerance_pct: number;
     grouping_window_days: number;
   };
@@ -230,3 +281,26 @@ export interface Settings {
 }
 
 export type Features = Record<"forecast" | "risk" | "optimizer" | "drill" | "benchmark" | "ask" | "data_health", boolean>;
+
+export type TrendPoint = Kpis & { run_id: string; buying_window: string };
+
+export interface Route {
+  factory_id: string;
+  market: string;
+  lots: number;
+  units: number;
+  bought_units: number;
+  backup_units: number;
+  review_units: number;
+  cost_usd: number;
+  on_time_units: number;
+  late_lots: number;
+  articles: number;
+  max_load_pct: number;
+}
+
+export interface Network {
+  run_id: string;
+  routes: Route[];
+  factories: { factory_id: string; country: string; weekly_capacity_units: number; cost_multiplier: number }[];
+}

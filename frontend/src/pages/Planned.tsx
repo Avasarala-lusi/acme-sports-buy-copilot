@@ -18,7 +18,7 @@ export function Planned() {
   const features = useQuery({ queryKey: ["features"], queryFn: api.features, staleTime: Infinity });
   return (
     <>
-      <PageHeader title="Planned capabilities" subtitle="Extensions in development. Each appears here as soon as it is enabled in the planning engine." />
+      <PageHeader eyebrow="Roadmap" title="Planned capabilities" subtitle="Extensions in development. Each appears here as soon as it is enabled in the planning engine." />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map(({ key, icon: Icon, title, text }) => {
           const on = features.data?.[key] ?? false;

@@ -1,19 +1,24 @@
-"""Weekly buy-plan engine.
+"""Buy-plan engine: weekly drafts, monthly purchases.
 
-Runs the spec rule cascade one MRP run at a time. Demand that is not yet due is carried
-forward to later runs (rolling window), and the capacity ledger accumulates our own
-assignments across runs. Every requisition ends with exactly one outcome.
+Every weekly MRP run takes in new demand (Rule 5 is applied on arrival). Purchases are committed
+only in the buying run of each month (client: one buying window, in the third week). The other
+runs show a draft of what the next window would buy with what is known now; a draft changes nothing.
+
+Demand that is not yet due is carried forward (rolling window), and the capacity ledger accumulates
+our own committed assignments. Factory loads are checked with the new lot included, and a lot that
+fits no certified factory goes to planner review instead of being bought. Every requisition ends
+with exactly one outcome.
 """
 from dataclasses import dataclass, field
 
 import pandas as pd
 
-from engine.calendar import natural_window, window_label
+from engine.calendar import BuyingCalendar, window_label
 from engine.capacity import CapacityLedger
 from engine.config import load_config
 from engine.data_loader import AcmeData, load_data
 from engine.rules import exclusion, timing
-from engine.rules.assignment import choose_factory
+from engine.rules.assignment import REVIEW, STATUS_LABELS, choose_from_chain
 from engine.rules.grouping import group_by_rdd
 from engine.rules.quantities import OK, PIGGYBACK, mpq_for, pick_to_fill, quantity_status
 
@@ -21,8 +26,10 @@ BOUGHT = "BOUGHT"
 FUTURE_FORECAST = "FUTURE_FORECAST"
 UNRESOLVED_MOQ = "UNRESOLVED_MOQ"
 UNRESOLVED_MPQ = "UNRESOLVED_MPQ"
+PLANNER_REVIEW = "PLANNER_REVIEW"
 OPEN = "OPEN"
-TERMINAL = {BOUGHT, FUTURE_FORECAST, UNRESOLVED_MOQ, UNRESOLVED_MPQ}
+TERMINAL = {BOUGHT, FUTURE_FORECAST, UNRESOLVED_MOQ, UNRESOLVED_MPQ, PLANNER_REVIEW}
+COMMITTED, DRAFT = "Committed", "Draft"
 
 
 @dataclass
@@ -48,11 +55,20 @@ class RunResult:
     lots: pd.DataFrame
     outcomes: pd.DataFrame
     open_prs: list[str]
+    is_buying_run: bool = True
+    open_reasons: dict = field(default_factory=dict)
+    buy_date: pd.Timestamp | None = None      # PO date of the window this run commits or previews
+    next_buy_date: pd.Timestamp | None = None
+
+    @property
+    def plan_status(self) -> str:
+        return COMMITTED if self.is_buying_run else DRAFT
 
 
 class Planner:
     def __init__(self, data: AcmeData | None = None, config: dict | None = None):
         self.cfg = config or load_config()
+        self.calendar = BuyingCalendar.from_config(self.cfg)
         self.data = data or load_data()
         self._prepare()
         self.reset()
@@ -73,15 +89,35 @@ class Planner:
         prs["early_buy"] = prs["article_id"].map(art["early_buy_flag"]).astype(bool)
         prs["last_chance"] = prs["article_id"].map(art["last_chance_flag"]).astype(bool)
         prs["primary"] = prs["article_id"].map(art["primary_factory"])
-        if cfg["backup_source"] == "article":
+        # backup chains: article-level (one backup per article) or the factory-level chain, walked
+        # backup -> backup's backup -> ... to the last resort (data v5: acyclic, ending at CN04)
+        factory_backup = fac["backup_factory"].dropna().to_dict()
+
+        def walk(f):
+            out = []
+            while f in factory_backup and factory_backup[f] not in out and factory_backup[f] != f:
+                f = factory_backup[f]
+                out.append(f)
+            return out
+
+        source = cfg["backup_source"]
+        if source == "article":
+            self.backup_chain = {a: [b] for a, b in art["backup_factory"].dropna().items()}
             prs["backup"] = prs["article_id"].map(art["backup_factory"])
+        elif source in ("factory", "factory_chain"):
+            chains = {f: walk(f) for f in fac.index}
+            if source == "factory":
+                chains = {f: c[:1] for f, c in chains.items()}
+            self.backup_chain = {a: chains[p] for a, p in art["primary_factory"].items()}
+            prs["backup"] = prs["article_id"].map(lambda a: (self.backup_chain.get(a) or [None])[0])
         else:
-            prs["backup"] = prs["primary"].map(fac["backup_factory"])
+            raise ValueError(f"unknown backup_source {source}")
         prs["has_order"] = prs["pr_id"].isin(so.index)
         prs["nsv"] = prs["pr_id"].map(so["net_sales_value"]).fillna(0.0)
-        cust = prs["pr_id"].map(so["customer_id"])
+        # data v5 carries the customer on every requisition; earlier versions only on sales orders
+        cust = prs["customer_id"] if "customer_id" in prs else prs["pr_id"].map(so["customer_id"])
         if cfg["data"]["dtc_as_single_customer"]:
-            cust = cust.where(~cust.fillna("").str.startswith("DTC"), "DTC")
+            cust = cust.where(prs["channel_id"] != exclusion.DTC, "DTC")
         prs["customer_id"] = cust
         mid_mfg = ((fac["mfg_lt_min_days"] + fac["mfg_lt_max_days"]) / 2).round()
         mid_trn = ((fac["trans_lt_min_days"] + fac["trans_lt_max_days"]) / 2).round()
@@ -105,6 +141,7 @@ class Planner:
         cap = self.factories["weekly_capacity_units"].to_dict()
         self.ledger = CapacityLedger(cap, self.cfg["capacity"]["spread_over_manufacturing"])
         self.open: dict[str, str] = {}          # pr_id -> latest wait reason
+        self.pr_notes: dict[str, list[str]] = {}  # Rule 5 exceptions recorded on arrival
         self.outcomes: dict[str, dict] = {}
         self.results: dict[str, RunResult] = {}
         self.lot_rows: list[dict] = []
@@ -151,43 +188,75 @@ class Planner:
         self.plan_through(self.runs["run_id"].iloc[-1])
 
     def _process(self, k: int) -> None:
-        cfg = self.cfg
         run = self.runs.iloc[k]
         run_id = run["run_id"]
-        run_date = pd.Timestamp(run["mrp_freeze_datetime_utc"]).normalize()
-        po_date = pd.Timestamp(run["po_execution_date"])
-        next_po = (pd.Timestamp(self.runs.iloc[k + 1]["po_execution_date"])
-                   if k + 1 < len(self.runs) else po_date + pd.Timedelta(days=7))
-        cutoff = cfg["buying_window"]["cutoff_day"]
-        moq = cfg["quantities"]["moq_per_market"]
-        tol = cfg["piggyback"]["tolerance_pct"]
-        lc_forecast = cfg["last_chance"]["include_forecast_only"]
+        po_date = pd.Timestamp(run["po_execution_date"]).normalize()
+        buy_date = pd.Timestamp(self.calendar.on_or_after(po_date))
+        next_buy = pd.Timestamp(self.calendar.after(buy_date))
+        is_buying = buy_date == po_date
         decided_before = set(self.outcomes)
 
-        # --- Rule 5 on new demand, then Rule 6 / Rule 1 on the whole open pool
-        notes: dict[str, list[str]] = {}
+        self._intake(run_id)
+        if is_buying:
+            rows, ledger = self._cascade(run_id, buy_date, next_buy, draft=False)
+            self.ledger = ledger
+            self.lot_rows.extend(rows)
+            decided_now = [self.outcomes[p] for p in self.outcomes if p not in decided_before]
+            open_now = dict(self.open)
+        else:
+            # Draft: preview the next window with what is known now, then restore the state.
+            saved_open, saved_outcomes = dict(self.open), dict(self.outcomes)
+            if self.cfg["buying_window"].get("weekly_drafts", True):
+                rows, ledger = self._cascade(run_id, buy_date, next_buy, draft=True)
+            else:
+                rows, ledger = [], self.ledger.copy()
+            decided_now = [self.outcomes[p] for p in self.outcomes if p not in decided_before]
+            open_now = dict(self.open)
+            self.open, self.outcomes = saved_open, saved_outcomes
+            # Rule 5 decisions taken on arrival are real, not part of the draft
+            for o in decided_now:
+                if o["outcome"] == FUTURE_FORECAST:
+                    self.outcomes[o["pr_id"]] = o
+                    self.open.pop(o["pr_id"], None)
+
+        self.results[run_id] = RunResult(run_id, pd.DataFrame(rows), pd.DataFrame(decided_now), list(open_now),
+                                         is_buying, open_now, buy_date, next_buy)
+        self.snapshots[run_id] = ledger.copy()
+        self.processed = k
+
+    def _intake(self, run_id: str) -> None:
+        """Rule 5 on new demand, as it arrives."""
+        lc_forecast = self.cfg["last_chance"]["include_forecast_only"]
         for p in self.new_by_run.get(run_id, []):
             pr = self.rows[p]
             excluded = exclusion.forecast_excluded(pr["channel_id"], pr["has_order"], pr["early_buy"])
             if excluded and not (pr["last_chance"] and lc_forecast):
                 self._decide([p], run_id, FUTURE_FORECAST, exclusion.EXCLUSION_REASON)
                 continue
-            self.open[p] = ""
+            self.open[p] = "New this week"
             if pr["channel_id"] == exclusion.WHOLESALE and not pr["has_order"]:
-                notes[p] = [exclusion.EARLY_BUY_REASON if pr["early_buy"] else exclusion.LAST_CHANCE_REASON]
+                self.pr_notes[p] = [exclusion.EARLY_BUY_REASON if pr["early_buy"] else exclusion.LAST_CHANCE_REASON]
 
+    def _cascade(self, run_id: str, buy_date: pd.Timestamp, next_buy: pd.Timestamp, draft: bool):
+        """Rules 6, 1, 2, 3, 4 and capacity routing on the open pool, for the window at buy_date."""
+        cfg = self.cfg
+        moq = cfg["quantities"]["moq_per_market"]
+        tol = cfg["piggyback"]["tolerance_pct"]
+
+        # --- Rule 6 / Rule 1 on the whole open pool
+        notes: dict[str, list[str]] = {p: list(self.pr_notes.get(p, [])) for p in self.open}
         due, waiting = [], []
         pool = self.prs.loc[list(self.open), ["pr_id", "release_primary", "last_chance"]]
         for p, rel, last_chance in pool.itertuples(index=False):
             if last_chance:
                 due.append(p)
-                notes.setdefault(p, []).append(exclusion.LAST_CHANCE_REASON)
-            elif timing.is_due(rel, run_date, cutoff):
+                notes[p].append(exclusion.LAST_CHANCE_REASON)
+            elif timing.is_due(rel, next_buy):
                 due.append(p)
-                notes.setdefault(p, []).append(timing.due_reason(rel, run_date, cutoff))
+                notes[p].append(timing.due_reason(rel, buy_date, next_buy))
             else:
                 waiting.append(p)
-                self.open[p] = timing.wait_reason(rel, run_date, cutoff)
+                self.open[p] = timing.wait_reason(rel, next_buy)
 
         # future pool for piggyback, earliest RDD first
         future = (self.prs.loc[waiting].sort_values("rdd_original")
@@ -223,7 +292,7 @@ class Planner:
                 c = candidates(lot.article_id, [lot.market])
                 picked = pick_to_fill(moq - qty, list(zip(c["pr_id"], c["requested_qty"])))
                 if picked:
-                    self._apply_piggyback(lot, picked, used_future, cutoff,
+                    self._apply_piggyback(lot, picked, used_future,
                                           f"Rule 4: {qty:.0f} was within {tol}% of MOQ {moq}")
                     status = OK
             if status == OK:
@@ -232,55 +301,54 @@ class Planner:
             elif lot.last_chance:
                 lot.warnings.append(f"Below MOQ: {qty:.0f} < {moq}, bought anyway (last chance)")
                 kept.append(lot)
-            elif self._can_wait(lot.pr_ids, lot.market, next_po):
+            elif self._can_wait(lot.pr_ids, next_buy):
                 for p in lot.pr_ids:
                     self.open[p] = f"Rule 3: lot of {qty:.0f} below MOQ {moq}; waiting for more demand"
             else:
                 self._decide(lot.pr_ids, run_id, UNRESOLVED_MOQ,
-                             f"Rule 3: lot of {qty:.0f} below MOQ {moq} and cannot wait")
+                             f"Rule 3: lot of {qty:.0f} below MOQ {moq} and cannot wait for the next window")
 
         # --- capacity routing + Rule 3 MPQ (+ Rule 4), repeated until stable
         lots = kept
         for _ in range(6):
-            ledger, placed = self._assign(lots, po_date)
-            changed, lots = self._check_mpq(placed, lots, candidates, used_future, run_id,
-                                            next_po, cutoff, tol)
+            ledger, placed = self._assign(lots, buy_date)
+            changed, lots = self._check_mpq(placed, lots, candidates, used_future, run_id, next_buy, tol)
             if not changed:
                 break
         else:
-            ledger, placed = self._assign(lots, po_date)
-        self.ledger = ledger
+            ledger, placed = self._assign(lots, buy_date)
 
-        # --- record bought lots
+        # --- record lots: bought, or sent to planner review
+        rows = []
+        prefix = "D" if draft else "L"
         for n, lot in enumerate(sorted(lots, key=lambda l: self._min_rdd(l.pr_ids)), 1):
-            lot.lot_id = f"{run_id}-L{n:03d}"
-            row = self._lot_row(lot, placed[id(lot)], notes)
-            self.lot_rows.append(row)
-            self._decide(lot.pr_ids, run_id, BOUGHT, "; ".join(lot.reasons), lot.lot_id)
+            lot.lot_id = f"{run_id}-{prefix}{n:03d}"
+            row = self._lot_row(lot, placed[id(lot)], notes, buy_date, draft)
+            rows.append(row)
+            if row["auto_decision"] == "Buy":
+                self._decide(lot.pr_ids, run_id, BOUGHT, "; ".join(lot.reasons), lot.lot_id)
+            else:
+                self._decide(lot.pr_ids, run_id, PLANNER_REVIEW,
+                             "No certified factory has capacity; needs planner review", lot.lot_id)
 
         for p in used_future:  # piggybacked demand left the open pool
             self.open.pop(p, None)
-
-        decided_now = [self.outcomes[p] for p in self.outcomes if p not in decided_before]
-        run_lots = pd.DataFrame([r for r in self.lot_rows if r["run_id"] == run_id])
-        self.results[run_id] = RunResult(run_id, run_lots, pd.DataFrame(decided_now), list(self.open))
-        self.snapshots[run_id] = self.ledger.copy()
-        self.processed = k
+        return rows, ledger
 
     # ---------------------------------------------------------------- steps
-    def _apply_piggyback(self, lot: Lot, picked, used_future, cutoff, why: str) -> None:
+    def _apply_piggyback(self, lot: Lot, picked, used_future, why: str) -> None:
         lot.pr_ids.extend(picked)
         lot.piggyback_prs.extend(picked)
         used_future.update(picked)
-        sources = sorted({window_label(natural_window(self.release_at(p, self.rows[p]["primary"]), cutoff))
+        sources = sorted({window_label(self.calendar.on_or_before(self.release_at(p, self.rows[p]["primary"])))
                           for p in picked})
         lot.piggyback_sources.extend(s for s in sources if s not in lot.piggyback_sources)
         lot.reasons.append(f"{why}; pulled {self._qty(picked):.0f} units forward from {', '.join(sources)}")
 
-    def _can_wait(self, pr_ids, market, next_po) -> bool:
+    def _can_wait(self, pr_ids, next_buy) -> bool:
         if not self.cfg["carry_forward"]["wait_if_not_late"]:
             return False
-        return all(self.rows[p]["release_primary"] >= next_po for p in pr_ids)
+        return all(self.rows[p]["release_primary"] >= next_buy for p in pr_ids)
 
     def _assign(self, lots: list[Lot], po_date):
         cfg = self.cfg["capacity"]
@@ -289,38 +357,46 @@ class Planner:
         order = sorted(lots, key=lambda l: self._min_rdd(l.pr_ids))
         for lot in order:
             first = self.rows[lot.pr_ids[0]]
-            primary, backup = first["primary"], first["backup"]
+            primary = first["primary"]
             certified = self.certified[lot.article_id]
             rdd = self._min_rdd(lot.pr_ids)
+            qty = self._qty(lot.pr_ids)
 
-            def plan_at(f):
+            chain = self.backup_chain.get(lot.article_id, [])
+            options = {}
+            for f in dict.fromkeys([primary, *chain]):
+                if f not in certified:
+                    continue
                 m, t = self.lot_lead_times(lot.pr_ids, f)
                 release = rdd - pd.Timedelta(days=m + t)
                 start = max(release, po_date)
-                return m, t, release, start, ledger.weeks_for(start, m)
-
-            mp, _, _, _, wp = plan_at(primary)
-            util_p = ledger.utilization(primary, wp)
-            util_b = None
-            if backup in certified:
-                _, _, _, _, wb = plan_at(backup)
-                util_b = ledger.utilization(backup, wb)
-            a = choose_factory(primary, backup, certified, util_p, util_b,
-                               cfg["backup_threshold_pct"], cfg["when_backup_also_full"])
-            m, t, release, start, _ = plan_at(a.factory)
-            qty = self._qty(lot.pr_ids)
-            ledger.add(a.factory, start, m, qty)
-            placed[id(lot)] = {"factory": a.factory, "backup": a.routed_to_backup, "mfg": m, "trans": t,
-                               "release": release, "start": start, "rdd": rdd, "qty": qty,
+                weeks = ledger.weeks_for(start, m)
+                options[f] = {"mfg": m, "trans": t, "release": release, "start": start,
+                              "before": ledger.utilization(f, weeks),
+                              "after": ledger.utilization_with(f, start, m, qty)}
+            a = choose_from_chain(primary, chain, certified, {f: o["after"] for f, o in options.items()},
+                                  cfg["backup_threshold_pct"], cfg["hard_limit_pct"], lot.last_chance,
+                                  cfg["when_no_capacity"])
+            o = options[a.factory]
+            if a.status != REVIEW:
+                ledger.add(a.factory, o["start"], o["mfg"], qty)
+            placed[id(lot)] = {"factory": a.factory, "backup": a.routed_to_backup, "mfg": o["mfg"],
+                               "trans": o["trans"], "release": o["release"], "start": o["start"], "rdd": rdd,
+                               "qty": qty, "status": a.status, "util_before": o["before"], "util_after": o["after"],
                                "reasons": a.reasons, "warnings": a.warnings, "primary": primary}
         return ledger, placed
 
-    def _check_mpq(self, placed, lots, candidates, used_future, run_id, next_po, cutoff, tol):
+    def _check_mpq(self, placed, lots, candidates, used_future, run_id, next_buy, tol):
+        """MPQ per article per factory for the window. Lots sent to planner review are not produced
+        and do not count towards a factory's total."""
         mpq_cfg = self.cfg["quantities"]["mpq"]
         groups: dict[tuple, list[Lot]] = {}
-        for lot in lots:
-            groups.setdefault((lot.article_id, placed[id(lot)]["factory"]), []).append(lot)
         changed, keep = False, []
+        for lot in lots:
+            if placed[id(lot)]["status"] == REVIEW:
+                keep.append(lot)
+                continue
+            groups.setdefault((lot.article_id, placed[id(lot)]["factory"]), []).append(lot)
         for (article, factory), glots in groups.items():
             category = self.rows[glots[0].pr_ids[0]]["category"]
             mpq = mpq_for(category, mpq_cfg)
@@ -333,7 +409,7 @@ class Planner:
                 if picked:
                     for p in picked:
                         target = next(l for l in glots if l.market == self.rows[p]["market_destination"])
-                        self._apply_piggyback(target, [p], used_future, cutoff,
+                        self._apply_piggyback(target, [p], used_future,
                                               f"Rule 4: {factory} total {total:.0f} was within {tol}% of MPQ {mpq}")
                     keep.extend(glots)
                     changed = True
@@ -341,7 +417,7 @@ class Planner:
             if status == OK or quantity_status(total, mpq, tol) == OK:
                 for l in glots:
                     if not any(r.startswith("Rule 3: MPQ") for r in l.reasons):
-                        l.reasons.append(f"Rule 3: MPQ {mpq} met at {factory} ({total:.0f} units this run)")
+                        l.reasons.append(f"Rule 3: MPQ {mpq} met at {factory} ({total:.0f} units this window)")
                 keep.extend(glots)
             elif any(l.last_chance for l in glots):
                 for l in glots:
@@ -350,7 +426,7 @@ class Planner:
             else:
                 changed = True
                 all_ids = [p for l in glots for p in l.pr_ids]
-                if all(self._can_wait(l.pr_ids, l.market, next_po) for l in glots):
+                if all(self._can_wait(l.pr_ids, next_buy) for l in glots):
                     for p in all_ids:
                         self.open[p] = f"Rule 3: {factory} total {total:.0f} below MPQ {mpq}; waiting for more demand"
                     for l in glots:  # piggybacked demand goes back to the open pool
@@ -359,10 +435,10 @@ class Planner:
                     pulled = {p for l in glots for p in l.piggyback_prs}
                     used_future.difference_update(pulled)
                     self._decide([p for p in all_ids if p not in pulled], run_id, UNRESOLVED_MPQ,
-                                 f"Rule 3: {factory} total {total:.0f} below MPQ {mpq} and cannot wait")
+                                 f"Rule 3: {factory} total {total:.0f} below MPQ {mpq} and cannot wait for the next window")
         return changed, keep
 
-    def _lot_row(self, lot: Lot, a: dict, notes) -> dict:
+    def _lot_row(self, lot: Lot, a: dict, notes, buy_date, draft: bool) -> dict:
         prs = self.prs.loc[lot.pr_ids]
         f = self.factories.loc[a["factory"]]
         arrival = a["start"] + pd.Timedelta(days=a["mfg"] + a["trans"])
@@ -381,11 +457,17 @@ class Planner:
         rule1 = next((n for p in lot.pr_ids for n in notes.get(p, []) if n.startswith("Rule 1")), None)
         if rule1:
             reasons.insert(0, rule1)
-        reasons += lot.reasons + a["reasons"]
+        review = a["status"] == REVIEW
+        # a review lot is not produced, so an MPQ note from an earlier assignment pass no longer applies
+        reasons += [r for r in lot.reasons if not (review and r.startswith("Rule 3: MPQ"))] + a["reasons"]
         unit_cost = float(prs["unit_cost_usd"].iloc[0])
         primary_mult = float(self.factories.loc[a["primary"], "cost_multiplier"])
         return {
-            "lot_id": lot.lot_id, "run_id": lot.run_id, "article_id": lot.article_id,
+            "lot_id": lot.lot_id, "run_id": lot.run_id, "plan_status": DRAFT if draft else COMMITTED,
+            "buying_window": window_label(buy_date), "auto_decision": "Review" if review else "Buy",
+            "capacity_status": STATUS_LABELS[a["status"]],
+            "util_before_pct": round(float(a["util_before"]), 1), "util_after_pct": round(float(a["util_after"]), 1),
+            "mfg_days": int(a["mfg"]), "article_id": lot.article_id,
             "category": prs["category"].iloc[0], "market_destination": lot.market,
             "consolidated_qty": int(prs["requested_qty"].sum()), "n_prs": len(lot.pr_ids),
             "pr_ids": ",".join(lot.pr_ids), "earliest_rdd": a["rdd"],
@@ -405,12 +487,24 @@ class Planner:
         }
 
     # ---------------------------------------------------------------- outputs
+    def open_reason(self, pr_id: str, run_id: str) -> str:
+        return self.results[run_id].open_reasons.get(pr_id, "Not yet due; carried to later runs")
+
     def run_result(self, run_id: str) -> RunResult:
         self.plan_through(run_id)
         return self.results[run_id]
 
     def all_lots(self) -> pd.DataFrame:
+        """Committed lots from every buying run (bought and sent to planner review). Drafts are not included."""
         return pd.DataFrame(self.lot_rows)
+
+    def bought_lots(self) -> pd.DataFrame:
+        lots = self.all_lots()
+        return lots[lots["auto_decision"] == "Buy"] if len(lots) else lots
+
+    def buying_runs(self) -> list[str]:
+        return [r for r in self.runs["run_id"] if self.calendar.is_window(
+            pd.Timestamp(self.runs.loc[self.run_index[r], "po_execution_date"]))]
 
     def pr_outcomes(self) -> pd.DataFrame:
         """One row per requisition seen so far: its final (or current open) outcome."""

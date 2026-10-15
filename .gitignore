@@ -1,5 +1,6 @@
 # Client data (Globant synthetic dataset): keep local, never commit
 data/raw/
+data/raw_v*/
 data/processed/
 *.docx
 *.pdf
@@ -22,9 +23,9 @@ venv/
 # Generated outputs (derived from client data)
 outputs/
 
-# Locally generated notebook (regenerate with notebooks/build_trend_notebook.py)
-notebooks/trend_analysis_generated.ipynb
-
 # Web front end build output and dependencies
 frontend/node_modules/
 frontend/dist/
+
+# Vite dependency cache (recreated by npm run dev)
+frontend/.vite/

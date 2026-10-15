@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowUpFromLine, CircleSlash, Clock, Factory, Hourglass, Layers, Scale } from "lucide-react";
 import { api } from "../api/client";
-import type { Decision, Lot } from "../api/types";
+import type { Decision, Lot, LotDecision } from "../api/types";
 import { Drawer } from "../components/Drawer";
-import { Badge, Button, Loading, Segmented, Select, Stat, Tabs } from "../components/ui";
+import { Badge, Button, LoadBar, Loading, Segmented, Select, Stat, Tabs, cx } from "../components/ui";
 import { DataTable } from "../components/DataTable";
-import { date, int, money, splitList } from "../lib/format";
+import { date, int, load, money, splitList } from "../lib/format";
 
 const ruleIcon = (text: string) => {
   if (text.startsWith("Rule 1")) return Clock;
@@ -21,7 +21,9 @@ const ruleIcon = (text: string) => {
 export function LotBadges({ lot }: { lot: Lot }) {
   return (
     <>
-      {lot.decision !== "Buy" && <Badge tone="bad">{lot.decision}</Badge>}
+      {lot.decision === "Review" && <Badge tone="warn" dot>Needs review</Badge>}
+      {lot.decision !== "Buy" && lot.decision !== "Review" && <Badge tone="bad" dot>{lot.decision}</Badge>}
+      {lot.capacity_status === "Over capacity (last chance)" && <Badge tone="bad">Over capacity</Badge>}
       {lot.decision_type === "manual" && <Badge tone="manual">Manual</Badge>}
       {lot.backup_routed && <Badge tone="info">Backup</Badge>}
       {lot.is_piggyback_applied && <Badge tone="accent">Piggyback</Badge>}
@@ -33,10 +35,10 @@ export function LotBadges({ lot }: { lot: Lot }) {
 
 type Tab = "why" | "requisitions" | "decision";
 
-export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: string; onClose: () => void }) {
+export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; runId: string; draft: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("why");
   const qc = useQueryClient();
-  const [decision, setDecision] = useState<Decision>("Buy");
+  const [decision, setDecision] = useState<LotDecision>("Buy");
   const [factory, setFactory] = useState("");
   const [note, setNote] = useState("");
 
@@ -48,6 +50,7 @@ export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: str
     }
   }, [lot]);
 
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, staleTime: Infinity });
   const reqs = useQuery({
     queryKey: ["lotReqs", runId, lot?.lot_id],
     queryFn: () => api.lotRequisitions(runId, lot!.lot_id),
@@ -70,13 +73,26 @@ export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: str
   return (
     <Drawer open={!!lot} onClose={onClose}
       title={<span className="font-mono">{lot.lot_id}</span>}
-      subtitle={<><span>{lot.article_id} · {lot.market_destination} · {lot.category}</span><LotBadges lot={lot} /></>}>
+      subtitle={<><span>{lot.article_id} · {lot.market_destination} · {lot.category}</span>{draft && <Badge tone="info">Draft</Badge>}<LotBadges lot={lot} /></>}>
       <div className="mb-5 grid grid-cols-2 gap-2">
         <Stat label="Units" value={int(lot.consolidated_qty)} />
-        <Stat label="Factory" value={<span className="text-base">{lot.assigned_factory}{lot.backup_routed && <span className="text-xs font-normal text-muted"> (primary {lot.primary_factory})</span>}</span>} />
+        <Stat label={lot.decision === "Review" ? "Proposed factory" : "Factory"} value={<span className="text-base">{lot.assigned_factory}{lot.backup_routed && <span className="text-xs font-normal text-muted"> (primary {lot.primary_factory})</span>}</span>} />
         <Stat label="Production cost" value={money(lot.total_cost_usd)} />
+        <Stat label="Buying window" value={<span className="text-base">{lot.buying_window} <span className="text-xs font-normal text-muted">{lot.plan_status}</span></span>} />
         <Stat label="Arrival vs RDD" tone={lot.on_time ? "good" : "bad"}
           value={<span className="text-base">{date(lot.expected_arrival)} <span className="text-xs font-normal text-muted">RDD {date(lot.earliest_rdd)}</span></span>} />
+      </div>
+
+      <div className="mb-5 rounded-xl border border-line p-3.5">
+        <div className="mb-2.5 flex items-baseline justify-between gap-2 text-xs">
+          <span className="text-muted">Load at {lot.assigned_factory} · busiest production week</span>
+          <span className={cx("font-semibold tabular", lot.util_after_pct > 100 ? "text-bad" : lot.util_after_pct >= 85 ? "text-warn" : "text-good")}>
+            {load(lot.util_before_pct)} → {load(lot.util_after_pct)} with this lot
+          </span>
+        </div>
+        <LoadBar before={lot.util_before_pct} after={lot.util_after_pct}
+          threshold={settings.data?.thresholds.backup_threshold_pct ?? 85} limit={settings.data?.thresholds.hard_limit_pct ?? 100} />
+        <div className="text-xs text-faint">{lot.capacity_status} · grey = already planned, colour = this lot</div>
       </div>
 
       <Tabs value={tab} onChange={setTab} tabs={[
@@ -92,15 +108,19 @@ export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: str
               <span className="font-semibold">Manual change: </span>{lot.override_note}
             </div>
           )}
-          <ol className="space-y-2">
+          <ol className="relative">
             {rules.map((r, i) => {
               const Icon = ruleIcon(r);
               const [head, ...rest] = r.split(": ");
+              const last = i === rules.length - 1;
               return (
-                <li key={i} className="flex gap-3 rounded-lg border border-line p-3">
-                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-sidebar text-muted"><Icon size={15} /></div>
-                  <div className="text-sm">
-                    <div className="font-medium">{rest.length ? head : `Step ${i + 1}`}</div>
+                <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                  {!last && <span className="absolute left-[15px] top-8 h-[calc(100%-24px)] w-px bg-line" />}
+                  <div className="relative z-10 grid h-8 w-8 shrink-0 place-items-center rounded-full border border-line bg-panel text-accent shadow-[var(--shadow-card)]">
+                    <Icon size={15} />
+                  </div>
+                  <div className="pt-1 text-sm">
+                    <div className="font-semibold">{rest.length ? head : `Step ${i + 1}`}</div>
                     <div className="text-muted">{rest.length ? rest.join(": ") : r}</div>
                   </div>
                 </li>
@@ -110,7 +130,7 @@ export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: str
           {warnings.length > 0 && (
             <div className="space-y-1.5">
               {warnings.map((w, i) => (
-                <div key={i} className="flex items-start gap-2 rounded-lg bg-warn-soft p-2.5 text-sm text-warn">
+                <div key={i} className="flex items-start gap-2 rounded-xl border border-warn/20 bg-warn-soft p-3 text-sm text-warn">
                   <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {w}
                 </div>
               ))}
@@ -131,14 +151,25 @@ export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: str
         ]} />
       ))}
 
-      {tab === "decision" && (
+      {tab === "decision" && draft && (
+        <p className="rounded-lg bg-info-soft p-3 text-sm text-info">
+          This is a draft lot. Lots and their IDs can change every week until the buying run, so decisions are made there.
+        </p>
+      )}
+      {tab === "decision" && !draft && (
         <div className="space-y-4">
           <p className="text-sm text-muted">
             Decisions are saved separately from the automatic plan and marked as manual. Exports use the decided plan.
           </p>
+          {lot.auto_decision === "Review" && (
+            <p className="rounded-lg bg-warn-soft p-3 text-sm text-warn">
+              No certified factory had room for this lot. Choosing Buy approves it although the factory will be over its limit;
+              switching to a factory with room or No-Go are the alternatives.
+            </p>
+          )}
           <div>
             <div className="mb-1.5 text-xs font-medium text-muted">Go / No-Go</div>
-            <Segmented value={decision} onChange={setDecision}
+            <Segmented value={decision as Decision} onChange={setDecision}
               options={[{ value: "Buy", label: "Buy" }, { value: "No-Go", label: "No-Go" }, { value: "Delay", label: "Delay" }]} />
           </div>
           <Select label="Factory (certified for this article)" value={factory} onChange={(e) => setFactory(e.target.value)}>
@@ -151,7 +182,9 @@ export function LotDrawer({ lot, runId, onClose }: { lot: Lot | null; runId: str
           </label>
           {(save.error || revert.error) && <div className="text-sm text-bad">{String((save.error ?? revert.error) as Error)}</div>}
           <div className="flex gap-2">
-            <Button variant="primary" onClick={() => save.mutate()} disabled={save.isPending}>Save decision</Button>
+            <Button variant="primary" onClick={() => save.mutate()} disabled={save.isPending}>
+              {lot.auto_decision === "Review" && decision === "Buy" ? "Approve purchase" : "Save decision"}
+            </Button>
             {lot.decision_type === "manual" && (
               <Button variant="danger" onClick={() => revert.mutate()} disabled={revert.isPending}>Revert to automatic</Button>
             )}

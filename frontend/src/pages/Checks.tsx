@@ -7,7 +7,10 @@ import { int, num } from "../lib/format";
 const labels: Record<string, string> = {
   every_pr_has_one_outcome: "Every requisition has exactly one outcome",
   no_pr_in_two_lots: "No requisition appears in two lots",
-  bought_prs_match_lots: "Bought requisitions match the lots",
+  bought_prs_match_lots: "Bought requisitions match the bought lots",
+  review_prs_match_lots: "Requisitions for review match the review lots",
+  purchases_only_in_buying_windows: "Purchases are committed only in monthly buying runs",
+  no_overload_except_last_chance: "No factory week over its limit, except labelled last-chance lots",
   units_add_up: "Units add up across all outcomes",
   lot_qty_matches_prs: "Lot quantities equal their requisitions",
 };
@@ -16,6 +19,7 @@ const outcomeLabels: Record<string, string> = {
   BOUGHT: "Bought",
   FUTURE_FORECAST: "Moved to Future (forecast)",
   OPEN: "Waiting, not yet due",
+  PLANNER_REVIEW: "Needs planner review (no factory capacity)",
   UNRESOLVED_MOQ: "Unresolved: below MOQ",
   UNRESOLVED_MPQ: "Unresolved: below MPQ",
 };
@@ -32,7 +36,7 @@ export function Checks() {
 
   return (
     <>
-      <PageHeader title="Data & checks" subtitle="Validation across all 100 runs, settings to confirm, and data findings." />
+      <PageHeader eyebrow="Validation" title="Data & checks" subtitle="Validation across all 100 runs, settings to confirm, and data findings." />
       <div className="mb-6 grid gap-3 md:grid-cols-3">
         <Stat label="Complete accounting" value={c.passed ? "Passed" : "Failed"} tone={c.passed ? "good" : "bad"} />
         <Stat label="Requisitions accounted for" value={`${int(c.prs_seen)} · ${int(c.units_seen)} units`} />

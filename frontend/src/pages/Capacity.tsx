@@ -4,18 +4,25 @@ import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContai
 import { api } from "../api/client";
 import { Card, ErrorBox, Loading, PageHeader } from "../components/ui";
 import { useRun } from "../lib/run";
+import { useToken } from "../lib/theme";
 
-const COLORS = ["#b04812", "#1d5fa8", "#1f7a4d", "#6b3fa0", "#946200", "#5e6975"];
+// Color follows the factory, never its rank: slot n of the validated categorical palette per factory.
+const FACTORY_ORDER = ["ACME-VN01", "ACME-BD02", "ACME-ID03", "ACME-CN04", "ACME-TR05", "ACME-IN06"];
 
 export function Capacity() {
   const { runId } = useRun();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, staleTime: Infinity });
   const cap = useQuery({ queryKey: ["capacity", runId], queryFn: () => api.capacity(runId) });
   const threshold = settings.data?.thresholds.backup_threshold_pct ?? 85;
+  const limit = settings.data?.thresholds.hard_limit_pct ?? 100;
+  const series = [1, 2, 3, 4, 5, 6].map((n) => useToken(`--color-series-${n}`)); // eslint-disable-line react-hooks/rules-of-hooks
+  const grid = useToken("--color-grid"), axis = useToken("--color-axis"), ink = useToken("--color-ink");
+  const panel = useToken("--color-panel"), line = useToken("--color-line");
+  const warn = useToken("--color-status-warning"), critical = useToken("--color-status-critical");
 
   const { data, factories } = useMemo(() => {
     const rows = cap.data ?? [];
-    const factories = [...new Set(rows.map((r) => r.factory_id))].sort();
+    const factories = [...new Set(rows.map((r) => r.factory_id))].sort((a, b) => FACTORY_ORDER.indexOf(a) - FACTORY_ORDER.indexOf(b));
     const byWeek = new Map<string, Record<string, number | string>>();
     for (const r of rows) {
       const key = r.week.slice(0, 10);
@@ -28,22 +35,30 @@ export function Capacity() {
 
   if (cap.isLoading) return <Loading />;
   if (cap.error) return <ErrorBox error={cap.error} />;
+  const color = (f: string) => series[(FACTORY_ORDER.indexOf(f) + FACTORY_ORDER.length) % FACTORY_ORDER.length] || axis;
   return (
     <>
-      <PageHeader title="Capacity"
-        subtitle="Weekly load per factory from our own assignments (rolling ledger), around the selected week. The dashed line is the backup threshold." />
-      <Card className="p-4">
-        <div className="h-[460px]">
+      <PageHeader eyebrow="Rolling capacity ledger" title="Capacity"
+        subtitle={`Weekly load per factory from our own assignments around the selected week, including this week's lots (a preview in a draft week). Only last-chance lots can take a factory past its ${limit}% limit.`} />
+      <Card className="p-5">
+        <div className="h-[480px]">
           <ResponsiveContainer>
-            <LineChart data={data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke="#e7e4dc" vertical={false} />
-              <XAxis dataKey="week" tick={{ fontSize: 11, fill: "#5e6975" }} tickFormatter={(w: string) => w.slice(5)} minTickGap={24} />
-              <YAxis tick={{ fontSize: 11, fill: "#5e6975" }} unit="%" />
-              <Tooltip formatter={(v: number) => `${v}%`} labelFormatter={(w: string) => `Week of ${w}`} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <ReferenceLine y={threshold} stroke="#b42318" strokeDasharray="5 4" label={{ value: `${threshold}% threshold`, fontSize: 11, fill: "#b42318", position: "insideTopRight" }} />
-              {factories.map((f, i) => (
-                <Line key={f} dataKey={f} stroke={COLORS[i % COLORS.length]} strokeWidth={2} dot={false} />
+            <LineChart data={data} margin={{ top: 16, right: 24, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke={grid} vertical={false} />
+              <XAxis dataKey="week" tick={{ fontSize: 11, fill: axis }} tickLine={false} axisLine={{ stroke: grid }}
+                tickFormatter={(w: string) => w.slice(5)} minTickGap={28} />
+              <YAxis tick={{ fontSize: 11, fill: axis }} tickLine={false} axisLine={false} unit="%" width={48} />
+              <Tooltip formatter={(v: number) => `${v}%`} labelFormatter={(w: string) => `Week of ${w}`}
+                contentStyle={{ background: panel, border: `1px solid ${line}`, borderRadius: 12, fontSize: 12, color: ink }}
+                labelStyle={{ color: ink, fontWeight: 600 }} itemSorter={(i) => -Number(i.value)} />
+              <Legend wrapperStyle={{ fontSize: 12, color: ink }} iconType="plainline" />
+              <ReferenceLine y={threshold} stroke={warn} strokeDasharray="5 4"
+                label={{ value: `${threshold}% threshold`, fontSize: 11, fill: axis, position: "insideTopRight" }} />
+              <ReferenceLine y={limit} stroke={critical} strokeDasharray="2 3"
+                label={{ value: `${limit}% limit`, fontSize: 11, fill: axis, position: "insideTopLeft" }} />
+              {factories.map((f) => (
+                <Line key={f} dataKey={f} name={f.replace("ACME-", "")} stroke={color(f)} strokeWidth={2} dot={false}
+                  activeDot={{ r: 4, strokeWidth: 2, stroke: panel }} />
               ))}
             </LineChart>
           </ResponsiveContainer>

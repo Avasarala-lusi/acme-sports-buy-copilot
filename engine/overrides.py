@@ -4,9 +4,10 @@ The spec requires the tool to distinguish automatically triggered rules from man
 decisions. The engine's plan is never changed; overrides are stored separately and applied to
 produce the "effective" plan that the app shows and exports.
 
-Supported overrides per run:
-  - lot decision: Buy (default) | No-Go | Delay
-  - lot factory switch (must be certified)
+Supported overrides per buying run (draft runs are previews and cannot be decided):
+  - lot decision: Buy | No-Go | Delay. Lots default to the engine's decision: Buy, or Review when no
+    certified factory had capacity; a planner approves a review lot by choosing Buy.
+  - lot factory switch (must be certified); the target factory's load after the move is checked
   - customer hold (removes that customer's units from every lot in the run)
 """
 import json
@@ -19,6 +20,13 @@ from engine.config import ROOT, load_config
 from engine.planner import Planner
 
 DECISIONS = ["Buy", "No-Go", "Delay"]
+
+
+def ensure_decidable(planner: Planner, run_id: str) -> None:
+    r = planner.run_result(run_id)
+    if not r.is_buying_run:
+        raise ValueError(f"{run_id} is a draft of the {r.buy_date:%d %b %Y} buying window; "
+                         "decisions are made in the buying run")
 
 
 class OverrideStore:
@@ -36,21 +44,26 @@ class OverrideStore:
 
     def set_lot(self, planner: Planner, run_id: str, lot_id: str, decision: str = "Buy",
                 factory: str | None = None, note: str = "") -> None:
-        if decision not in DECISIONS:
-            raise ValueError(f"decision must be one of {DECISIONS}")
+        ensure_decidable(planner, run_id)
         lots = planner.run_result(run_id).lots.set_index("lot_id")
         if lot_id not in lots.index:
             raise KeyError(f"unknown lot {lot_id} in {run_id}")
+        if decision not in DECISIONS and decision != lots.loc[lot_id, "auto_decision"]:
+            raise ValueError(f"decision must be one of {DECISIONS}")
         article = lots.loc[lot_id, "article_id"]
         if factory == lots.loc[lot_id, "assigned_factory"]:
             factory = None
         if factory and factory not in planner.certified[article]:
             raise ValueError(f"{factory} is not certified for {article}")
-        if decision == "Buy" and not factory and not note:
+        if decision == lots.loc[lot_id, "auto_decision"] and not factory and not note:
             self.run(run_id)["lots"].pop(lot_id, None)
         else:
             self.run(run_id)["lots"][lot_id] = {"decision": decision, "factory": factory, "note": note,
                                                 "updated_at": datetime.now().isoformat(timespec="seconds")}
+        self.save()
+
+    def revert_lot(self, run_id: str, lot_id: str) -> None:
+        self.run(run_id)["lots"].pop(lot_id, None)
         self.save()
 
     def hold_customer(self, run_id: str, customer_id: str) -> None:
@@ -76,8 +89,11 @@ class OverrideStore:
 
 def effective_lots(planner: Planner, run_id: str, store: OverrideStore) -> pd.DataFrame:
     """The run's lots with saved manual decisions applied. Untouched lots stay automatic."""
-    lots = planner.run_result(run_id).lots.copy()
-    lots["decision"] = "Buy"
+    r = planner.run_result(run_id)
+    lots = r.lots.copy()
+    if lots.empty:
+        return lots.assign(decision=pd.Series(dtype=str), override_note=pd.Series(dtype=str))
+    lots["decision"] = lots["auto_decision"]
     lots["override_note"] = ""
     overrides = store.data.get(run_id, {})
     held = set(overrides.get("held_customers", []))
@@ -86,7 +102,8 @@ def effective_lots(planner: Planner, run_id: str, store: OverrideStore) -> pd.Da
         return lots
 
     moq = planner.cfg["quantities"]["moq_per_market"]
-    po = pd.Timestamp(planner.runs.set_index("run_id").loc[run_id, "po_execution_date"])
+    po = r.buy_date
+    threshold = planner.cfg["capacity"]["backup_threshold_pct"]
     rows = []
     for lot in lots.to_dict("records"):
         ids = lot["pr_ids"].split(",")
@@ -105,9 +122,11 @@ def effective_lots(planner: Planner, run_id: str, store: OverrideStore) -> pd.Da
         if ov.get("factory"):
             notes.append(f"Factory switched {lot['assigned_factory']} → {factory}")
             changed = True
-        if ov.get("decision", "Buy") != "Buy":
+        if ov.get("decision", lot["auto_decision"]) != lot["auto_decision"]:
             lot["decision"] = ov["decision"]
             changed = True
+            if lot["auto_decision"] == "Review" and ov["decision"] == "Buy":
+                notes.append("Approved by the planner although no certified factory had capacity")
         if ov.get("note"):
             notes.append(ov["note"])
             changed = True
@@ -134,8 +153,17 @@ def effective_lots(planner: Planner, run_id: str, store: OverrideStore) -> pd.Da
                 on_time_units=float(sum(planner.rows[p]["requested_qty"] for p in keep
                                         if planner.rows[p]["rdd_original"] >= arrival)),
             )
+            extra = []
             if qty < moq and lot["decision"] == "Buy":
-                lot["warnings"] = " | ".join(x for x in [lot["warnings"], f"Below MOQ after override: {qty:,.0f} < {moq}"] if x)
+                extra.append(f"Below MOQ after override: {qty:,.0f} < {moq}")
+            if ov.get("factory"):
+                from sim.scenarios import move_load
+                load = move_load(planner, run_id, lot["lot_id"], factory)
+                lot.update(util_after_pct=round(load["target_after_pct"], 1))
+                if load["target_after_pct"] >= threshold:
+                    extra.append(f"Capacity after switch: {factory} at {load['target_after_pct']:.0f}% "
+                                 f"(threshold {threshold:.0f}%)")
+            lot["warnings"] = " | ".join(x for x in [lot["warnings"], *extra] if x)
 
         if changed or not keep:
             lot["decision_type"] = "manual"

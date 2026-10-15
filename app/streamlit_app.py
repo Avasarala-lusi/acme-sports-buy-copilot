@@ -20,7 +20,7 @@ from engine.accounting import accounting_report, rule_violations  # noqa: E402
 from engine.metrics import comparison_table  # noqa: E402
 from engine.output import fact_buy_plan_suggestions, get_planner  # noqa: E402
 from engine.overrides import DECISIONS, OverrideStore, effective_fact_table, effective_lots  # noqa: E402
-from engine.planner import FUTURE_FORECAST, UNRESOLVED_MOQ, UNRESOLVED_MPQ  # noqa: E402
+from engine.planner import FUTURE_FORECAST, PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ  # noqa: E402
 from engine.settings_info import settings_items  # noqa: E402
 from sim import scenarios  # noqa: E402
 
@@ -32,6 +32,9 @@ LOT_COLUMNS = {
     "market_destination": st.column_config.TextColumn("Market"),
     "consolidated_qty": st.column_config.NumberColumn("Units", format="%d"),
     "assigned_factory": st.column_config.TextColumn("Factory"),
+    "util_after_pct": st.column_config.NumberColumn("Factory load %", format="%.0f",
+                                                    help="Busiest production week at the factory, including this lot"),
+    "capacity_status": st.column_config.TextColumn("Capacity"),
     "backup_routed": st.column_config.CheckboxColumn("Backup?"),
     "suggested_rdd": st.column_config.DateColumn("Suggested RDD"),
     "on_time": st.column_config.CheckboxColumn("On time?"),
@@ -80,30 +83,38 @@ def week_excel(run_id: str, eff: pd.DataFrame) -> bytes:
 
 
 def kpis(eff: pd.DataFrame) -> dict:
+    if eff.empty:
+        return {"lots": 0, "units": 0.0, "cost": 0.0, "on_time": 0.0, "backup": 0.0, "review": 0}
     buy = eff[(eff["decision"] == "Buy") & (eff["consolidated_qty"] > 0)]
     units = float(buy["consolidated_qty"].sum())
     return {
         "lots": len(buy), "units": units, "cost": float(buy["total_cost_usd"].sum()),
         "on_time": float(buy["on_time_units"].sum() / units * 100) if units else 0.0,
         "backup": float((buy["assigned_factory"] != buy["primary_factory"]).mean() * 100) if len(buy) else 0.0,
+        "review": int((eff["decision"] == "Review").sum()),
     }
 
 
 runs = planner.runs.copy()
-runs["label"] = (runs["run_id"] + " · " + pd.to_datetime(runs["mrp_freeze_datetime_utc"]).dt.strftime("%d %b %Y")
+buying = set(planner.buying_runs())
+runs["label"] = (runs["run_id"].map(lambda r: ("● " if r in buying else "○ ") + r) + " · " + pd.to_datetime(runs["mrp_freeze_datetime_utc"]).dt.strftime("%d %b %Y")
                  + " · " + runs["season"] + " " + runs["range_version"])
 
 # ------------------------------------------------------------------ 1. select a week
 st.sidebar.header("1 · Select a week")
-label = st.sidebar.selectbox("MRP run", runs["label"], index=19)
+label = st.sidebar.selectbox("MRP run", runs["label"], index=19, help="● buying run (purchases committed) · ○ draft week")
 run = runs[runs["label"] == label].iloc[0]
 run_id = run["run_id"]
 result = planner.run_result(run_id)
+draft = not result.is_buying_run
+window = f"WIN-{result.buy_date:%Y-%m}"
 lots = result.lots
 eff = effective_lots(planner, run_id, store)
 n_manual = store.count(run_id)
 st.sidebar.markdown(
-    f"""**Buy week calendar**
+    f"""**{"Buying run" if not draft else "Draft week"}: {window} ({result.buy_date:%d %b %Y})**
+
+**Buy week calendar**
 - Freeze: {pd.Timestamp(run['mrp_freeze_datetime_utc']):%a %d %b}
 - As-Is plan: {pd.Timestamp(run['as_is_plan_date']):%a %d %b}
 - Go / No-Go: {pd.Timestamp(run['go_nogo_date']):%a %d %b}
@@ -118,8 +129,14 @@ if n_manual:
 st.sidebar.caption("Thresholds and client decisions are set in config/thresholds.yaml")
 
 st.title("Acme Sports · Weekly Buy Planner")
-st.caption(f"{run_id} · season {run['season']} · range {run['range_version']} · decisions are automatic "
-           "unless marked manual")
+st.caption(f"{run_id} · season {run['season']} · range {run['range_version']} · buying window {window} · "
+           "decisions are automatic unless marked manual")
+if draft:
+    st.info(f"Draft. This week is between buying windows: it shows what the {window} window on "
+            f"{result.buy_date:%d %b %Y} would buy with the demand known today. Nothing is ordered and no capacity "
+            "is reserved; decisions are made in the buying run.")
+else:
+    st.success(f"Buying run: purchases for {window} are committed this week. Next window: {result.next_buy_date:%d %b %Y}.")
 
 tab_plan, tab_change, tab_pf, tab_cap, tab_export, tab_checks = st.tabs(
     ["2 · Buy plan", "3 · Test a change", "Pull-forward", "Capacity", "4 · Export", "Data & checks"])
@@ -130,19 +147,23 @@ with tab_plan:
     unresolved = out[out["outcome"].isin([UNRESOLVED_MOQ, UNRESOLVED_MPQ])] if len(out) else out
     excluded = out[out["outcome"] == FUTURE_FORECAST] if len(out) else out
     prs = planner.prs
-    k, k0 = kpis(eff), kpis(lots.assign(decision="Buy"))
+    k, k0 = kpis(eff), kpis(lots.assign(decision=lots["auto_decision"]) if len(lots) else lots)
     delta = (lambda a, b, fmt: None if not n_manual or a == b else fmt(a - b))
-    c = st.columns(3) + st.columns(3)
-    c[0].metric("Lots to buy", f"{k['lots']}", delta(k["lots"], k0["lots"], lambda x: f"{x:+d} vs automatic"))
+    c = st.columns(4) + st.columns(3)
+    c[0].metric("Lots in draft" if draft else "Lots to buy", f"{k['lots']}", delta(k["lots"], k0["lots"], lambda x: f"{x:+d} vs automatic"))
     c[1].metric("Units", f"{k['units']:,.0f}", delta(k["units"], k0["units"], lambda x: f"{x:+,.0f}"))
     c[2].metric("Production cost", f"${k['cost'] / 1e6:,.2f}M", delta(k["cost"], k0["cost"], lambda x: f"{x / 1e3:+,.0f}k"),
                 delta_color="inverse")
     c[3].metric("Units on time", f"{k['on_time']:.1f}%")
     c[4].metric("Routed to backup", f"{k['backup']:.0f}% of lots")
+    c[6].metric("Needs planner review", f"{k['review']} lots",
+                    help="No certified factory had room; not bought until a planner decides")
     c[5].metric("Unresolved units", f"{prs.loc[unresolved['pr_id'], 'requested_qty'].sum() if len(unresolved) else 0:,.0f}",
                 help="Demand that could not be bought under the rules and could not wait")
 
-    sub = st.tabs([f"Purchases ({len(eff)})", f"Unresolved demand ({len(unresolved)})",
+    review = eff[eff["decision"] == "Review"] if len(eff) else eff
+    sub = st.tabs([f"Purchases ({len(eff) - len(review)})", f"Needs planner review ({len(review)})",
+                   f"Unresolved demand ({len(unresolved)})",
                    f"Moved to Future, Rule 5 ({len(excluded)})", f"Waiting, not yet due ({len(result.open_prs)})"])
     with sub[0]:
         f1, f2, f3, f4 = st.columns(4)
@@ -150,7 +171,7 @@ with tab_plan:
         fc = f2.multiselect("Factory", sorted(eff["assigned_factory"].unique()))
         only_warn = f3.checkbox("Only lots with warnings")
         only_manual = f4.checkbox("Only manual changes")
-        view = eff.copy()
+        view = eff[eff["decision"] != "Review"].copy()
         if mk:
             view = view[view["market_destination"].isin(mk)]
         if fc:
@@ -161,7 +182,9 @@ with tab_plan:
             view = view[view["decision_type"] == "manual"]
         st.dataframe(view[list(LOT_COLUMNS)], use_container_width=True, hide_index=True, column_config=LOT_COLUMNS)
 
-        if len(eff):
+        if draft:
+            st.caption("Go / No-Go decisions are made in the buying run; draft lots can change every week.")
+        elif len(eff):
             st.subheader("Go / No-Go decision for a lot")
             g1, g2 = st.columns([1, 2])
             pick = g1.selectbox("Lot", eff["lot_id"], key="gonogo_lot")
@@ -171,8 +194,11 @@ with tab_plan:
             g2.dataframe(prs.loc[ids, ["pr_id", "size_id", "channel_id", "requested_qty", "rdd_original",
                                        "customer_id", "nsv"]], hide_index=True, use_container_width=True, height=160)
             d1, d2, d3 = st.columns(3)
-            decision = d1.radio("Decision", DECISIONS, index=DECISIONS.index(saved.get("decision", "Buy")),
-                                horizontal=True, key=f"dec_{pick}")
+            auto = row["auto_decision"]
+            options = DECISIONS + ([auto] if auto not in DECISIONS else [])
+            decision = d1.radio("Decision", options, index=options.index(saved.get("decision", auto)),
+                                horizontal=True, key=f"dec_{pick}",
+                                help="Review lots had no factory capacity; Buy approves them anyway")
             auto_factory = lots.set_index("lot_id").loc[pick, "assigned_factory"]
             certified = sorted(planner.certified[row["article_id"]])
             factory = d2.selectbox("Factory (certified only)", certified,
@@ -183,22 +209,28 @@ with tab_plan:
                 store.set_lot(planner, run_id, pick, decision, factory, note)
                 st.rerun()
             if saved and b2.button("Revert lot to automatic"):
-                store.set_lot(planner, run_id, pick, "Buy", None, "")
+                store.revert_lot(run_id, pick)
                 st.rerun()
 
     with sub[1]:
+        st.caption("No certified factory had room for these lots, even with the backup. They are not bought "
+                   "automatically: approve (Buy), switch factory, or reject (No-Go) in the Go / No-Go section.")
+        if len(review):
+            st.dataframe(review[list(LOT_COLUMNS)], use_container_width=True, hide_index=True, column_config=LOT_COLUMNS)
+
+    with sub[2]:
         st.caption("Demand that could not be bought under the rules and could not wait. Shown separately, "
                    "never treated as a feasible purchase.")
         if len(unresolved):
             st.dataframe(unresolved[["pr_id", "outcome", "reason"]].merge(
                 prs[["pr_id", "article_id", "market_destination", "requested_qty", "rdd_original"]].reset_index(drop=True)),
                 hide_index=True, use_container_width=True)
-    with sub[2]:
+    with sub[3]:
         if len(excluded):
             st.dataframe(excluded[["pr_id", "reason"]].merge(
                 prs[["pr_id", "article_id", "market_destination", "requested_qty", "rdd_original"]].reset_index(drop=True)),
                 hide_index=True, use_container_width=True)
-    with sub[3]:
+    with sub[4]:
         waiting = prs.loc[result.open_prs, ["pr_id", "article_id", "market_destination", "requested_qty",
                                             "rdd_original", "release_primary"]] if result.open_prs else prs.iloc[0:0]
         st.caption("Open demand carried to later runs (rolling window). Each keeps its PR ID, so it is never bought twice.")
@@ -228,7 +260,9 @@ with tab_change:
             with st.expander("Units removed by size"):
                 st.dataframe(r["sizes"], hide_index=True, use_container_width=True)
             held = store.data.get(run_id, {}).get("held_customers", [])
-            if cust in held:
+            if draft:
+                st.caption("Holds are applied in the buying run.")
+            elif cust in held:
                 if st.button(f"Release hold on {cust}"):
                     store.release_customer(run_id, cust)
                     st.rerun()
@@ -236,7 +270,8 @@ with tab_change:
                 store.hold_customer(run_id, cust)
                 st.rerun()
     elif scenario == "Delay production":
-        f = st.selectbox("Factory", sorted(lots["assigned_factory"].unique()) if len(lots) else [])
+        bought = lots[lots["auto_decision"] == "Buy"] if len(lots) else lots
+        f = st.selectbox("Factory", sorted(bought["assigned_factory"].unique()) if len(bought) else [])
         days = st.slider("Delay (days)", 1, 60, 14)
         if f:
             r = scenarios.delay_factory(planner, run_id, f, days)
@@ -269,24 +304,34 @@ with tab_change:
                 c3.metric("New arrival", f"{r['arrival_after']:%d %b %Y}",
                           "on time" if r["on_time_after"] else "late",
                           delta_color="normal" if r["on_time_after"] else "inverse")
-                d.metric("Target load", f"{r['target_utilization_pct']:.0f}%")
-                if r["capacity_warning"]:
-                    st.warning(f"{target} is above the capacity threshold in those weeks.")
-                st.caption(f"MOQ still met: {'yes' if r['moq_still_met'] else 'no'}")
-                if st.button(f"Apply switch to {target} to plan", type="primary"):
+                d.metric("Target load with this lot", f"{r['target_utilization_pct']:.0f}%",
+                         f"was {r['target_load_before_pct']:.0f}%", delta_color="off")
+                if r["over_capacity"]:
+                    st.error(f"{target} would exceed its weekly capacity in those production weeks.")
+                elif r["capacity_warning"]:
+                    st.warning(f"{target} would be above the backup threshold in those weeks.")
+                st.caption(f"MOQ still met: {'yes' if r['moq_still_met'] else 'no'} · "
+                           f"{lot['assigned_factory']} load after the move: {r['source_load_after_pct']:.0f}% · "
+                           f"MPQ {r['mpq']:,}: {lot['assigned_factory']} {r['source_total_after']:,.0f} units, "
+                           f"{target} {r['target_total_after']:,.0f} units "
+                           f"({'met' if r['mpq_source_ok'] and r['mpq_target_ok'] else 'not met'})")
+                if draft:
+                    st.caption("Switches are applied in the buying run.")
+                elif st.button(f"Apply switch to {target} to plan", type="primary"):
                     saved = store.data.get(run_id, {}).get("lots", {}).get(lot_id, {})
-                    store.set_lot(planner, run_id, lot_id, saved.get("decision", "Buy"), target,
+                    store.set_lot(planner, run_id, lot_id, saved.get("decision", lot["auto_decision"]), target,
                                   saved.get("note", ""))
                     st.rerun()
 
 # ------------------------------------------------------------------ pull-forward
 with tab_pf:
-    st.caption("Projected load for the next buying windows (committed lots plus open demand at its primary "
-               "factory). Windows at or above the threshold get a pull-forward recommendation.")
+    st.caption("Projected load for the next buying windows (planned lots plus open demand at its primary "
+               "factory). A window whose busiest week reaches the threshold gets recommendations; each move is "
+               "tested on a shared copy of the ledger together with the moves before it.")
     util, rec = pull_forward_view(run_id)
-    heat = util.pivot(index="factory_id", columns="window", values="avg_utilization_pct")
+    heat = util.pivot(index="factory_id", columns="window", values="peak_utilization_pct")
     st.plotly_chart(px.imshow(heat.round(0), text_auto=True, color_continuous_scale="OrRd", aspect="auto",
-                              labels={"color": "Avg weekly load %"}), use_container_width=True)
+                              labels={"color": "Busiest week %"}), use_container_width=True)
     if len(rec):
         st.metric("Actionable recommendations", int(rec["actionable"].sum()), f"{len(rec)} groups reviewed",
                   delta_color="off")
@@ -304,6 +349,7 @@ with tab_cap:
                   labels={"utilization_pct": "Load % of weekly capacity", "week": "Production week"})
     fig.add_hline(y=planner.cfg["capacity"]["backup_threshold_pct"], line_dash="dash",
                   annotation_text="backup threshold")
+    fig.add_hline(y=planner.cfg["capacity"]["hard_limit_pct"], line_dash="dot", annotation_text="factory limit")
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Rolling ledger from our own assignments (client decision); the static utilisation table is not used.")
 

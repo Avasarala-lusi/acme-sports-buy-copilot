@@ -6,7 +6,7 @@ requisition in the run it appears, with no rules applied.
 """
 import pandas as pd
 
-from engine.planner import BOUGHT, FUTURE_FORECAST, OPEN, UNRESOLVED_MOQ, UNRESOLVED_MPQ, Planner
+from engine.planner import FUTURE_FORECAST, OPEN, PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ, Planner
 
 
 def as_is_plan(planner: Planner, run_ids: list[str] | None = None) -> pd.DataFrame:
@@ -29,7 +29,7 @@ def as_is_plan(planner: Planner, run_ids: list[str] | None = None) -> pd.DataFra
 
 
 def plan_kpis(planner: Planner, run_ids: list[str] | None = None) -> dict:
-    lots = planner.all_lots()
+    lots = planner.bought_lots()
     out = planner.pr_outcomes()
     if run_ids is not None:
         lots = lots[lots["run_id"].isin(run_ids)]
@@ -46,6 +46,7 @@ def plan_kpis(planner: Planner, run_ids: list[str] | None = None) -> dict:
         "backup_routed_pct": float(lots["backup_routed"].mean() * 100) if len(lots) else 0.0,
         "lots_with_warnings": int((lots["warnings"] != "").sum()) if len(lots) else 0,
         "unresolved_units": units(UNRESOLVED_MOQ) + units(UNRESOLVED_MPQ),
+        "review_units": units(PLANNER_REVIEW),
         "forecast_excluded_units": units(FUTURE_FORECAST),
         "open_units": units(OPEN),
     }
@@ -66,12 +67,13 @@ def as_is_kpis(planner: Planner, run_ids: list[str] | None = None) -> dict:
         "backup_routed_pct": float(a["backup_triggered"].mean() * 100),
         "lots_below_moq": int((per_lot < moq).sum()),
         "unresolved_units": 0.0,
+        "review_units": 0.0,
     }
 
 
 def comparison_table(planner: Planner, run_ids: list[str] | None = None) -> pd.DataFrame:
     ours, ref = plan_kpis(planner, run_ids), as_is_kpis(planner, run_ids)
     keys = ["units_bought", "production_cost_usd", "cost_per_unit_usd", "units_on_time",
-            "on_time_pct", "backup_routed_pct", "unresolved_units"]
+            "on_time_pct", "backup_routed_pct", "unresolved_units", "review_units"]
     return pd.DataFrame({"metric": keys, "our_plan": [ours[k] for k in keys],
                          "as_is_reference": [ref[k] for k in keys]})
