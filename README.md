@@ -23,20 +23,45 @@ Data health checks, load forecast, on-time probability, network optimiser with a
 benchmark and disruption drill; stretch: learned thresholds and plain-English questions.
 
 ## Run it
+Requires Python 3.10+ and Node.js 18+.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+(cd frontend && npm install && npm run build)  # build the web app (not committed; rebuild after every pull)
 ```
 Put the nine ACME CSVs from data v5 in `data/raw/` (client data is never committed), then:
 ```bash
+uvicorn api.main:app --port 8000           # API and the built web app: open http://localhost:8000/ui
+```
+Other commands:
+```bash
 python scripts/run_plan.py                 # plan all runs, write outputs/
-uvicorn api.main:app --port 8000           # API (also serves the built web app at /ui)
-(cd frontend && npm install && npm run dev) # web app in development, http://localhost:5173
+(cd frontend && npm run dev)               # web app with live reload, http://localhost:5173 (API must be running)
 streamlit run app/streamlit_app.py         # analyst app
 jupyter notebook notebooks/trend_analysis.ipynb  # the five trend analyses
 python scripts/build_worked_examples.py     # regenerate the worked examples
 pytest                                     # 91 tests
 ```
+The first plan takes about 25 seconds; it is cached in `outputs/` and rebuilt automatically when the code or
+config changes.
+
+## Updating to the latest version
+```bash
+git checkout main && git pull
+pip install -r requirements.txt
+(cd frontend && npm install && npm run build)  # without this, /ui keeps showing the previous build
+```
+Then restart `uvicorn` and hard-refresh the browser (Cmd+Shift+R on macOS, Ctrl+Shift+R on Windows).
+Check that `data/raw/` holds data v5 (25,141 requisitions in `fact_purchase_requisitions.csv`).
+`git log -1 --oneline` shows the version you are on; compare it with the latest commit on GitHub.
+
+## Troubleshooting
+| Symptom | Fix |
+|---|---|
+| The web app looks out of date | Rebuild it (`npm run build` in `frontend/`), restart `uvicorn`, hard-refresh |
+| `/ui` shows "Not Found" | The web app has not been built yet: run `npm install && npm run build` in `frontend/` |
+| Numbers differ between teammates | Different data versions: everyone needs data v5 in `data/raw/` |
+| Port 8000 already in use | Another copy is running: stop it, or start on another port (`--port 8001`) |
 
 ## Layout
 | Folder | Contents |
