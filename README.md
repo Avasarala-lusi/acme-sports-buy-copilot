@@ -9,7 +9,6 @@ supply-chain challenge: weekly drafts, monthly purchases. Runs on the client's d
   Capacity is checked with each new lot included, and lots that fit no certified factory go to planner review.
   Writes `fact_buy_plan_suggestions` for all 23 buying windows in the 100 MRP runs.
 - **Web app** (`frontend/`): buy plan with rule explanations and Go/No-Go decisions, what-if scenarios, pull-forward, capacity, factory network map, export and data checks.
-- **Streamlit app** (`app/`): the same workflow in a lightweight analyst interface.
 - **What-if scenarios:** hold a customer, check minimums, delay production, switch factories.
 - **Go/No-Go decisions:** Buy / No-Go / Delay, factory switches and customer holds saved as manual changes, reversible.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows; moves are tested together on one ledger with MOQ and MPQ checks.
@@ -37,10 +36,9 @@ Other commands:
 ```bash
 python scripts/run_plan.py                 # plan all runs, write outputs/
 (cd frontend && npm run dev)               # web app with live reload, http://localhost:5173 (API must be running)
-streamlit run app/streamlit_app.py         # analyst app
 jupyter notebook notebooks/trend_analysis.ipynb  # the five trend analyses
 python scripts/build_worked_examples.py     # regenerate the worked examples
-pytest                                     # 91 tests
+pytest                                     # run the remaining automated tests
 ```
 The first plan takes about 25 seconds; it is cached in `outputs/` and rebuilt automatically when the code or
 config changes.
@@ -69,7 +67,6 @@ Check that `data/raw/` holds data v5 (25,141 requisitions in `fact_purchase_requ
 | `config/` | `thresholds.yaml`: every threshold and client decision |
 | `engine/` | data loader, rules, capacity ledger, planner, accounting, metrics, pull-forward, outputs |
 | `sim/` | what-if scenarios |
-| `app/` | Streamlit planner app |
 | `api/` | FastAPI service |
 | `frontend/` | React web app (see frontend/README.md) |
 | `notebooks/` | trend analysis notebook (five analyses) |

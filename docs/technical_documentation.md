@@ -9,16 +9,21 @@ delay risk and learned thresholds) build on this engine.
 
 ## 1. How to run
 
+Requires Python 3.10+ and Node.js 18+. The React web app is the project's user interface.
+
 ```bash
 pip install -r requirements.txt
 # put the nine ACME CSVs in data/raw/ (client data is never committed)
 python scripts/run_plan.py                 # plan all 100 runs, write outputs/
-streamlit run app/streamlit_app.py         # planner app (select week, plan, test a change, export)
-uvicorn api.main:app --reload              # REST API for a custom front end
+(cd frontend && npm install && npm run build)  # build the React web app
+uvicorn api.main:app --port 8000           # API and web app: http://localhost:8000/ui/
 jupyter notebook notebooks/trend_analysis.ipynb  # the five trend analyses
 python scripts/build_worked_examples.py     # regenerate docs/worked_examples.md
-pytest                                     # 91 tests
+pytest                                     # run the remaining automated tests
 ```
+
+For front-end development, keep the API running and run `npm run dev` in `frontend/` from
+a second terminal. Open `http://localhost:5173`. See `frontend/README.md` for details.
 
 The first full plan takes about 25 seconds (100 runs, including a draft for each of the 77 weeks between buying
 windows); the planned engine is cached in `outputs/` and reloads in a few seconds.
@@ -40,7 +45,7 @@ The cache key includes the config and the engine source, so it is rebuilt automa
 | `engine/output.py` | `fact_buy_plan_suggestions` and other output files; engine cache |
 | `engine/overrides.py` | Saved manual Go/No-Go decisions, applied on top of the automatic plan |
 | `sim/scenarios.py` | The what-if scenarios (spec section 5) |
-| `app/streamlit_app.py` | Planner app |
+| `frontend/` | React planner web app |
 | `api/main.py` | FastAPI service |
 | `notebooks/` | Trend analysis notebook: the five required analyses |
 | `tests/` | Unit, integration and scenario tests |
@@ -212,8 +217,9 @@ cost of the alternative (routing to the backup in the overloaded window).
 | Correct scenarios: hand-calculated checks | Passed (tests/test_scenarios.py); worked examples in `docs/worked_examples.md` |
 | Comparison with a reference plan | See below |
 
-Tests: `pytest` runs 91 tests: rule unit tests, integration tests on the full plan, scenario hand checks,
-manual-decision tests, data checks, API tests and headless app tests. They include a test for each internal review
+Tests: `pytest` runs rule unit tests, integration tests on the full plan, scenario hand checks,
+manual-decision tests, data checks and API tests. The former Streamlit-only screen tests have been removed;
+the remaining suite needs a fresh run after this change. These tests include checks for internal review
 finding: purchases only in buying runs, the 84% + 500-unit capacity case, held customers never used in a fix and no
 requisition reused, factory-switch load after the move, and pull-forward averages and combined moves.
 
