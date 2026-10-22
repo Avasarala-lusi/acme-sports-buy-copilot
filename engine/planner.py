@@ -218,6 +218,10 @@ class Planner:
                 bands.append([lot])
         return [band for bands in groups.values() for band in bands]
 
+    def _retried(self, pr_id: str) -> bool:
+        """The requisition was sent to planner review or left unresolved in an earlier window."""
+        return self.outcomes.get(pr_id, {}).get("outcome") in {PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ}
+
     def _decide(self, pr_ids, run_id: str, outcome: str, reason: str, lot_id: str | None = None):
         for p in pr_ids:
             self.outcomes[p] = {"pr_id": p, "decided_in_run": run_id, "outcome": outcome,
@@ -321,6 +325,14 @@ class Planner:
             if p in forced and self.eligible_pull(p,buy_date):
                 due.append(p)
                 notes[p].append("Capacity pull-forward accepted by planner")
+            elif (not last_chance and pd.Timestamp(rel) < buy_date and self._retried(p)
+                  and cfg["capacity"].get("retried_late_demand", "planner_review") == "planner_review"):
+                # Demand already sent to review/unresolved is retried for visibility, but once its release date has
+                # passed it can only arrive late: the planner decides instead of an automatic late purchase.
+                days = (buy_date - pd.Timestamp(rel)).days
+                self._decide([p], run_id, PLANNER_REVIEW,
+                             f"Retried demand: production could start only {days} days after its release date, "
+                             "so it would arrive late; planner decision")
             elif last_chance:
                 due.append(p)
                 notes[p].append(exclusion.LAST_CHANCE_REASON)

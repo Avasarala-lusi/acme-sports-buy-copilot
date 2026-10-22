@@ -123,3 +123,23 @@ def test_baseline_evaluation_uses_the_same_requisitions(planner):
     for m in ["Backup-triggered assignments (% of PRs)", "Load spread across factories (avg weekly std, pts)",
               "Article-market lots below MOQ 300 (%)"]:
         assert m in ev.index
+
+
+def test_retried_demand_is_not_bought_late_automatically(planner):
+    """Demand sent to review or left unresolved is retried for visibility, but a later automatic purchase must
+    still be able to start by its release date; otherwise it stays with the planner."""
+    earlier = {}
+    for run in planner.buying_runs():  # drafts are previews; only buying runs decide
+        out = planner.results[run].outcomes
+        for x in (out.itertuples() if len(out) else []):
+            if x.outcome in ("PLANNER_REVIEW", "UNRESOLVED_MOQ", "UNRESOLVED_MPQ"):
+                earlier.setdefault(x.pr_id, run)
+    lots = planner.bought_lots()
+    lots = lots[(~lots["last_chance"]) & (lots["decision_type"] == "auto")]
+    late = []
+    for lot in lots.itertuples():
+        for p in lot.pr_ids.split(","):
+            if p in earlier and planner.run_index[earlier[p]] < planner.run_index[lot.run_id]:
+                if planner.rows[p]["release_primary"] < lot.production_start:
+                    late.append((lot.lot_id, p))
+    assert not late, late[:5]

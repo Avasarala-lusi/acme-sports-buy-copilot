@@ -297,19 +297,26 @@ The client named the factory assignments recorded in `fact_purchase_requisitions
 same requisitions and units that our plan buys. The baseline places each at its supplied factory with its own lead
 times, starting on the PO date of the run it appeared in (`engine/metrics.py: baseline_evaluation`).
 
-| Measure (same 8,939 requisitions) | Baseline | Our plan |
+| Measure (same 8,324 requisitions) | Baseline | Our plan |
 |---|---|---|
-| Backup-triggered assignments | 54.2% | 10.2% |
-| Load spread across factories (average weekly standard deviation) | 72.7 pts | 24.6 pts |
-| Busiest factory each week (average) | 200.2% | 83.4% |
-| Factory-weeks above 100% | 55 | 0 |
-| Article-market lots below MOQ 300 | 22.6% | 11.8% |
-| Production cost | $643M | $613M |
-| Units on time | 97.0% | 40.7% |
+| Backup-triggered assignments | 54.8% | 10.8% |
+| Load spread across factories (average weekly standard deviation) | 68.5 pts | 24.4 pts |
+| Busiest factory each week (average) | 190.2% | 82.5% |
+| Factory-weeks above 100% | 67 | 0 |
+| Article-market lots below MOQ 300 | 21.9% | 11.2% |
+| Production cost | $610M | $583M |
+| Units on time | 97.0% | 75.0% |
 
 Our plan reduces backup-triggered assignments, lowers utilisation variance and protects MOQ per market, at lower
-cost and never above the 100% ceiling. Its on-time share is much lower: every late lot is a late start, where
-production begins on the buying window's PO date after the requisition's release date.
+cost and never above the 100% ceiling. Its on-time share is lower because production starts on the buying window's
+PO date and demand that arrives between windows can start after its release date.
+
+**Retried demand.** Demand sent to planner review or left unresolved stays in the open pool and is retried in later
+windows, so it stays visible. Once its release date has passed it could only arrive late, so it is no longer bought
+automatically: it stays in planner review, marked as late (`capacity.retried_late_demand: planner_review`; `buy`
+restores automatic late purchases). With automatic late purchases the on-time share was 40.7%: those lots arrived a
+median 45 days late, and the client asked for such conflicts to be surfaced for the planner rather than resolved
+automatically.
 
 ## 10. Deviations and assumptions
 

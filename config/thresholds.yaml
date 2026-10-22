@@ -32,6 +32,8 @@ capacity:
   spread_over_manufacturing: true  # [client] business-day-proportional capacity in the production interval
   hard_limit_pct: 100            # [client] no automatic or manual purchase may assume overtime
   when_no_capacity: planner_review  # [client] keep demand visible and show failed checks
+  retried_late_demand: planner_review  # planner_review | buy: retried review/unresolved demand whose release date
+                                 # has passed stays in review (would arrive late) instead of an automatic late purchase
 
 lead_times:
   other_factory: midpoint        # [client] arithmetic midpoint; estimated source shown
