@@ -218,6 +218,10 @@ class Planner:
                 bands.append([lot])
         return [band for bands in groups.values() for band in bands]
 
+    def _retried(self, pr_id: str) -> bool:
+        """The requisition was sent to planner review or left unresolved in an earlier window."""
+        return self.outcomes.get(pr_id, {}).get("outcome") in {PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ}
+
     def _decide(self, pr_ids, run_id: str, outcome: str, reason: str, lot_id: str | None = None):
         for p in pr_ids:
             self.outcomes[p] = {"pr_id": p, "decided_in_run": run_id, "outcome": outcome,
@@ -321,6 +325,14 @@ class Planner:
             if p in forced and self.eligible_pull(p,buy_date):
                 due.append(p)
                 notes[p].append("Capacity pull-forward accepted by planner")
+            elif (not last_chance and pd.Timestamp(rel) < buy_date and self._retried(p)
+                  and cfg["capacity"].get("retried_late_demand", "planner_review") == "planner_review"):
+                # Demand already sent to review/unresolved is retried for visibility, but once its release date has
+                # passed it can only arrive late: the planner decides instead of an automatic late purchase.
+                days = (buy_date - pd.Timestamp(rel)).days
+                self._decide([p], run_id, PLANNER_REVIEW,
+                             f"Retried demand: production could start only {days} days after its release date, "
+                             "so it would arrive late; planner decision")
             elif last_chance:
                 due.append(p)
                 notes[p].append(exclusion.LAST_CHANCE_REASON)
@@ -485,13 +497,31 @@ class Planner:
                     a.status=REVIEW
                     a.warnings.append("Accepted pull-forward no longer fits below 85%; planner review")
             o = options[a.factory]
+            alternatives = self._alternatives(lot, ledger, po_date, qty) if a.status == REVIEW else []
             if a.status != REVIEW:
                 ledger.add(a.factory, o["start"], o["mfg"], qty)
-            placed[id(lot)] = {"factory": a.factory, "backup": a.routed_to_backup, "mfg": o["mfg"],
+            placed[id(lot)] = {"alternatives": alternatives, "factory": a.factory, "backup": a.routed_to_backup, "mfg": o["mfg"],
                                "trans": o["trans"], "release": o["release"], "start": o["start"], "rdd": rdd,
                                "qty": qty, "status": a.status, "util_before": o["before"], "util_after": o["after"],
                                "reasons": a.reasons, "warnings": a.warnings, "primary": primary}
         return ledger, placed
+
+    def _alternatives(self, lot: Lot, ledger, po_date, qty: float) -> list[str]:
+        """Options for a lot no chain factory had room for: every certified factory with its load (this lot
+        added), arrival and cost, feasible ones first. The planner chooses; nothing here is bought."""
+        hard = self.cfg["capacity"]["hard_limit_pct"]
+        rdd = self._min_rdd(lot.pr_ids)
+        unit_cost = self.rows[lot.pr_ids[0]]["unit_cost_usd"]
+        start = pd.Timestamp(po_date)
+        out = []
+        for f in sorted(self.certified[lot.article_id]):
+            m, t = self.lot_lead_times(lot.pr_ids, f)
+            load = ledger.utilization_with(f, start, m, qty)
+            arrival = timing.delivery_date(start, m, t)
+            cost = qty * unit_cost * float(self.factories.loc[f, "cost_multiplier"])
+            out.append((load > hard, load, f"{f}: {load:.0f}% with this lot ({'fits' if load <= hard else 'over limit'}), "
+                        f"arrives {arrival:%Y-%m-%d}{' on time' if arrival <= rdd else ' late'}, ${cost:,.0f}"))
+        return [text for _, _, text in sorted(out)]
 
     def _check_mpq(self, placed, lots, candidates, used_future, run_id, next_buy, tol):
         """MPQ per article per factory for the window. Lots sent to planner review are not produced
@@ -605,6 +635,7 @@ class Planner:
             "is_piggyback_applied": bool(lot.piggyback_sources),
             "piggyback_source_window": ",".join(lot.piggyback_sources) or None,
             "last_chance": lot.last_chance, "decision_type": lot.decision_type,
+            "alternatives": " | ".join(a.get("alternatives", [])),
             "reason": " | ".join(reasons), "warnings": " | ".join(warnings),
         }
 

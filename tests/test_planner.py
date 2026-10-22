@@ -103,3 +103,43 @@ def test_review_lots_are_not_bought_or_exported(planner):
     assert set(ids)<=set(out.index)  # reviewed demand can be purchased in a later window
     fact = fact_buy_plan_suggestions(planner)
     assert not set(fact["suggestion_id"].str[4:]) & set(review["lot_id"])
+
+
+def test_review_lots_list_alternatives(planner):
+    lots = planner.all_lots()
+    # lots sent to review because no factory in the chain had capacity
+    review = lots[(lots["auto_decision"] == "Review") & lots["warnings"].str.contains("no certified factory has room")]
+    assert len(review)
+    assert (review["alternatives"].str.len() > 0).all()
+    assert review["alternatives"].str.contains("with this lot").all()
+
+
+def test_baseline_evaluation_uses_the_same_requisitions(planner):
+    from engine.metrics import baseline_evaluation
+    from engine.planner import BOUGHT
+    ev = baseline_evaluation(planner).set_index("metric")
+    n = ev.loc["Requisitions compared (same PRs, same units)"]
+    assert n["baseline"] == n["our_plan"] == (planner.pr_outcomes()["outcome"] == BOUGHT).sum()
+    for m in ["Backup-triggered assignments (% of PRs)", "Load spread across factories (avg weekly std, pts)",
+              "Article-market lots below MOQ 300 (%)"]:
+        assert m in ev.index
+
+
+def test_retried_demand_is_not_bought_late_automatically(planner):
+    """Demand sent to review or left unresolved is retried for visibility, but a later automatic purchase must
+    still be able to start by its release date; otherwise it stays with the planner."""
+    earlier = {}
+    for run in planner.buying_runs():  # drafts are previews; only buying runs decide
+        out = planner.results[run].outcomes
+        for x in (out.itertuples() if len(out) else []):
+            if x.outcome in ("PLANNER_REVIEW", "UNRESOLVED_MOQ", "UNRESOLVED_MPQ"):
+                earlier.setdefault(x.pr_id, run)
+    lots = planner.bought_lots()
+    lots = lots[(~lots["last_chance"]) & (lots["decision_type"] == "auto")]
+    late = []
+    for lot in lots.itertuples():
+        for p in lot.pr_ids.split(","):
+            if p in earlier and planner.run_index[earlier[p]] < planner.run_index[lot.run_id]:
+                if planner.rows[p]["release_primary"] < lot.production_start:
+                    late.append((lot.lot_id, p))
+    assert not late, late[:5]

@@ -19,6 +19,7 @@ import { Loading } from "./components/ui";
 // The chart library is large; load the capacity page only when it is opened.
 const Capacity = lazy(() => import("./pages/Capacity").then((m) => ({ default: m.Capacity })));
 // The globe (three.js) is larger still; load it only on the network page.
+const Forecast = lazy(() => import("./pages/Forecast").then((m) => ({ default: m.Forecast })));
 const Network = lazy(() => import("./pages/Network").then((m) => ({ default: m.Network })));
 
 const queryClient = new QueryClient({
@@ -37,6 +38,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="what-if" element={<WhatIf />} />
               <Route path="pull-forward" element={<PullForward />} />
               <Route path="capacity" element={<Suspense fallback={<Loading />}><Capacity /></Suspense>} />
+              <Route path="forecast" element={<Suspense fallback={<Loading />}><Forecast /></Suspense>} />
               <Route path="network" element={<Suspense fallback={<Loading />}><Network /></Suspense>} />
               <Route path="export" element={<Export />} />
               <Route path="checks" element={<Checks />} />

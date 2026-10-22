@@ -117,6 +117,32 @@ export function Checks() {
           </Card>
         </div>
       </div>
+
+      <div className="mt-6">
+        <SectionTitle hint="Same requisitions and units as our plan buys">Evaluation against the client's baseline</SectionTitle>
+        <Card className="overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-sidebar text-xs text-muted">
+              <tr><th className="px-4 py-2 text-left font-medium">Measure</th><th className="px-4 py-2 text-right font-medium">Baseline</th>
+                <th className="px-4 py-2 text-right font-medium">Our plan</th><th className="px-2 py-2" /></tr>
+            </thead>
+            <tbody>
+              {(c.baseline ?? []).map((r) => (
+                <tr key={r.metric} className="border-t border-line">
+                  <td className="px-4 py-2">{r.metric}{r.note && <div className="text-[11px] text-faint">{r.note}</div>}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{num(r.baseline, Math.abs(r.baseline) < 1000 ? 1 : 0)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{num(r.our_plan, Math.abs(r.our_plan) < 1000 ? 1 : 0)}</td>
+                  <td className="px-2 py-2">{r.improved == null ? null : r.improved
+                    ? <Badge tone="good">better</Badge> : <Badge tone="warn">worse</Badge>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="border-t border-line px-4 py-2.5 text-xs text-faint">
+            Baseline = the factory assignments recorded in fact_purchase_requisitions (client decision), on the same requisitions.
+          </div>
+        </Card>
+      </div>
     </>
   );
 }

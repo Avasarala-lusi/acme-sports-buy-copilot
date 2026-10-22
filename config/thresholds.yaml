@@ -32,6 +32,8 @@ capacity:
   spread_over_manufacturing: true  # [client] business-day-proportional capacity in the production interval
   hard_limit_pct: 100            # [client] no automatic or manual purchase may assume overtime
   when_no_capacity: planner_review  # [client] keep demand visible and show failed checks
+  retried_late_demand: planner_review  # planner_review | buy: retried review/unresolved demand whose release date
+                                 # has passed stays in review (would arrive late) instead of an automatic late purchase
 
 lead_times:
   other_factory: midpoint        # [client] arithmetic midpoint; estimated source shown
@@ -59,3 +61,7 @@ last_chance:
 
 backup_source: factory_chain     # [client] matrix certification gates each factory-chain step
                                  # assignment walks the factory chain (backup, its backup, ... to CN04, the last resort)
+
+forecast:
+  model: stage_seasonal          # stage_seasonal | extra_trees | gradient_boosting | seasonal_naive | moving_average
+                                 # chosen by the walk-forward backtest (lowest WAPE on the current data)

@@ -215,4 +215,7 @@ def effective_fact_table(planner,run_id,store):
     out=lots[(lots["decision"]=="Buy") & (lots["consolidated_qty"]>0)].copy()
     out["suggestion_id"]="SUG-"+out["lot_id"]
     out["suggested_rdd"]=pd.to_datetime(out["suggested_rdd"]).dt.date
-    return out[SPEC_COLUMNS].reset_index(drop=True)
+    # client: record the planner's choice with each suggestion (after the spec columns)
+    out["planner_note"]=out["override_note"]
+    extra=[c for c in ["decision","decision_type","lead_time_source","planner_note"] if c in out]
+    return out[SPEC_COLUMNS+extra].reset_index(drop=True)

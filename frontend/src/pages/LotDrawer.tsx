@@ -84,6 +84,16 @@ export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; run
         <Stat label="Inventory exposure vs earliest original RDD"
           value={<span className="text-base">{lot.inventory_exposure_days} days <span className="text-xs font-normal text-muted">{lot.inventory_exposure_days < 0 ? `(${Math.abs(lot.inventory_exposure_days)} days early)` : lot.inventory_exposure_days > 0 ? "(late)" : "(unchanged)"}</span></span>} />
       </div>
+      {lot.alternatives && (
+        <div className="mb-3 rounded-xl border border-line p-3">
+          <div className="mb-2 text-xs font-medium text-muted">Alternatives for the planner (certified factories, with this lot)</div>
+          <ul className="space-y-1 font-mono text-[12px]">
+            {lot.alternatives.split(" | ").map((a) => (
+              <li key={a} className={a.includes("(fits)") ? "text-good" : "text-faint"}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <p className="mb-3 text-xs text-muted">Lead times: {lot.lead_time_source}. Exposure is a signed date difference, not a storage-cost estimate. Individual PR differences appear in the requisitions tab.</p>
 
       <div className="mb-5 rounded-xl border border-line p-3.5">
