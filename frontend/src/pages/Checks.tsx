@@ -8,9 +8,9 @@ const labels: Record<string, string> = {
   every_pr_has_one_outcome: "Every requisition has exactly one outcome",
   no_pr_in_two_lots: "No requisition appears in two lots",
   bought_prs_match_lots: "Bought requisitions match the bought lots",
-  review_prs_match_lots: "Requisitions for review match the review lots",
-  purchases_only_in_buying_windows: "Purchases are committed only in monthly buying runs",
-  no_overload_except_last_chance: "No factory week over its limit, except labelled last-chance lots",
+  review_prs_visible: "Requests needing review remain traceable",
+  purchases_only_in_buying_windows: "Purchases are committed only in MID/EOM buying runs",
+  no_overload: "Every factory production week respects the hard ceiling",
   units_add_up: "Units add up across all outcomes",
   lot_qty_matches_prs: "Lot quantities equal their requisitions",
 };
@@ -98,7 +98,7 @@ export function Checks() {
           </div>
         </div>
         <div>
-          <SectionTitle hint="Reference plan still to be agreed">Comparison with the as-is assignments</SectionTitle>
+          <SectionTitle hint="Different purchased volumes; total cost differences are not validated savings">Comparison with the as-is assignments</SectionTitle>
           <Card className="overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-sidebar text-xs text-muted">

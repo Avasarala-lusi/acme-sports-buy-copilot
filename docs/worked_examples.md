@@ -1,5 +1,8 @@
 # Worked examples: MRP-WK020 (14 Dec 2025)
 
+> Historical examples from the prior calendar and capacity model. Regenerate before reuse.
+> Current rules and assumptions are in `docs/client_rule_updates.md`.
+
 Each example takes a real lot from the plan and shows the calculation step by step, so it can be checked by hand or in Excel. Values come from the supplied data and `config/thresholds.yaml`. The script that writes this page re-checks every result against the engine.
 
 

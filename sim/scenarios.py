@@ -8,13 +8,14 @@ import pandas as pd
 
 from engine.planner import Planner
 from engine.rules.quantities import mpq_for, pick_to_fill
+from engine.rules.timing import delivery_date
 
 def _run_lots(planner: Planner, run_id: str) -> pd.DataFrame:
     return planner.run_result(run_id).lots.copy()
 
 
 def _bought(lots: pd.DataFrame) -> pd.DataFrame:
-    return lots[lots["auto_decision"] == "Buy"] if len(lots) else lots
+    return lots[lots.get("decision",lots["auto_decision"]).fillna(lots["auto_decision"]) == "Buy"] if len(lots) else lots
 
 
 def _qty(planner: Planner, ids) -> float:
@@ -44,6 +45,7 @@ def check_minimums(planner: Planner, run_id: str, lots: pd.DataFrame, qty_col: s
     moq = planner.cfg["quantities"]["moq_per_market"]
     reserved: set[str] = set()
     rows = []
+    original_lots=planner.run_result(run_id).lots.set_index("lot_id")
     for lot in lots.itertuples():
         qty = getattr(lot, qty_col)
         base = {"lot_id": lot.lot_id, "pulled_pr_ids": ""}
@@ -56,7 +58,13 @@ def check_minimums(planner: Planner, run_id: str, lots: pd.DataFrame, qty_col: s
                          "qty_after_fix": qty, "suggested_rdd_after_fix": lot.suggested_rdd})
             continue
         c = _future_candidates(planner, run_id, lot.article_id, lot.market_destination, exclude_customer, reserved)
+        base = {"lot_id": lot.lot_id, "pulled_pr_ids": ""}
+        original = original_lots.loc[lot.lot_id]
+        ids = [p for p in original.pr_ids.split(",") if planner.rows[p]["customer_id"] != exclude_customer]
+        c = c.loc[c["pr_id"].map(lambda p: planner.rdd_span_ok(ids+[p]) and planner.eligible_pull(p,planner.results[run_id].buy_date)).astype(bool)]
         picked = pick_to_fill(moq - qty, list(zip(c["pr_id"], c["requested_qty"])))
+        if picked and not planner.rdd_span_ok(ids+picked):
+            picked=[]
         if picked:
             reserved.update(picked)
             added = c.set_index("pr_id").loc[picked]
@@ -65,7 +73,8 @@ def check_minimums(planner: Planner, run_id: str, lots: pd.DataFrame, qty_col: s
                    + (f", none from {exclude_customer}" if exclude_customer else ""))
             rows.append({**base, "moq_ok": False, "fix": fix, "pulled_pr_ids": ",".join(picked),
                          "qty_after_fix": qty + added["requested_qty"].sum(),
-                         "suggested_rdd_after_fix": max(lot.suggested_rdd, added["rdd_original"].max())})
+                         "suggested_rdd_after_fix": delivery_date(planner.results[run_id].buy_date,
+                             *planner.lot_lead_times(ids+picked,original.assigned_factory))})
         else:
             rows.append({**base, "moq_ok": False,
                          "fix": "No eligible same-market future demand to pull; hold for next window or accept below MOQ",
@@ -81,9 +90,10 @@ def hold_customer(planner: Planner, run_id: str, customer_id: str) -> dict:
     rows, sizes = [], []
     for lot in lots.itertuples():
         ids = lot.pr_ids.split(",")
-        held = prs.loc[ids][prs.loc[ids, "customer_id"] == customer_id]
-        if held.empty:
+        held_ids=[p for p in ids if planner.rows[p]["customer_id"]==customer_id]
+        if not held_ids:
             continue
+        held=prs.loc[held_ids]
         removed = float(held["requested_qty"].sum())
         rows.append({"lot_id": lot.lot_id, "article_id": lot.article_id,
                      "market_destination": lot.market_destination, "assigned_factory": lot.assigned_factory,
@@ -100,7 +110,7 @@ def hold_customer(planner: Planner, run_id: str, customer_id: str) -> dict:
                 "lots": affected, "sizes": pd.DataFrame(sizes), "moq_alerts": pd.DataFrame()}
     minimums = check_minimums(planner, run_id, affected, "qty_after", exclude_customer=customer_id)
     affected = affected.merge(minimums, on="lot_id")
-    affected = _recheck_after_hold(planner, run_id, lots, affected)
+    affected = _recheck_after_hold(planner, run_id, lots, affected, customer_id)
     return {
         "customer_id": customer_id,
         "lots_affected": len(affected),
@@ -111,7 +121,7 @@ def hold_customer(planner: Planner, run_id: str, customer_id: str) -> dict:
     }
 
 
-def _recheck_after_hold(planner: Planner, run_id: str, lots: pd.DataFrame, affected: pd.DataFrame) -> pd.DataFrame:
+def _recheck_after_hold(planner: Planner, run_id: str, lots: pd.DataFrame, affected: pd.DataFrame, customer_id: str) -> pd.DataFrame:
     """MOQ, MPQ (per article per factory this window) and factory load after the hold and the fixes."""
     cfg = planner.cfg
     moq = cfg["quantities"]["moq_per_market"]
@@ -122,13 +132,26 @@ def _recheck_after_hold(planner: Planner, run_id: str, lots: pd.DataFrame, affec
         if a.lot_id not in bought.index:
             continue
         lot = bought.loc[a.lot_id]
-        delta = a.qty_after_fix - lot["consolidated_qty"]
-        ledger.add(lot["assigned_factory"], lot["production_start"], int(lot["mfg_days"]), delta)
+        ids=[p for p in lot.pr_ids.split(",") if planner.rows[p]["customer_id"]!=customer_id]
+        ids+=list(filter(None,a.pulled_pr_ids.split(",")))
+        ledger.remove(lot["assigned_factory"],lot["production_start"],lot["mfg_days"],lot["consolidated_qty"])
+        if ids:
+            m,t=planner.lot_lead_times(ids,lot["assigned_factory"])
+            ledger.add(lot["assigned_factory"],lot["production_start"],m,a.qty_after_fix)
+            bought.loc[a.lot_id,"pr_ids"]=",".join(ids)
+            bought.loc[a.lot_id,"mfg_days"]=m
         final[a.lot_id] = a.qty_after_fix
-    totals: dict[tuple, float] = {}
-    for lot_id, q in final.items():
-        key = (bought.loc[lot_id, "article_id"], bought.loc[lot_id, "assigned_factory"])
-        totals[key] = totals.get(key, 0.0) + q
+    totals = {}
+    records=[]
+    for lot_id,q in final.items():
+        if q:
+            record=bought.loc[lot_id].to_dict()
+            record.update(lot_id=lot_id,consolidated_qty=q)
+            record["earliest_rdd"]=planner._min_rdd(record["pr_ids"].split(","))
+            records.append(record)
+    for band in planner.mpq_groups(records):
+        total=sum(r["consolidated_qty"] for r in band)
+        for row in band: totals[row["lot_id"]]=total
     categories = lots.set_index("lot_id")["category"]
     out = []
     for a in affected.to_dict("records"):
@@ -136,10 +159,10 @@ def _recheck_after_hold(planner: Planner, run_id: str, lots: pd.DataFrame, affec
         mpq = mpq_for(categories[a["lot_id"]], cfg["quantities"]["mpq"])
         if a["lot_id"] in bought.index:
             lot = bought.loc[a["lot_id"]]
-            load = ledger.utilization(lot["assigned_factory"], ledger.weeks_for(lot["production_start"], int(lot["mfg_days"])))
+            load = ledger.utilization(lot["assigned_factory"], ledger.weeks_for(lot["production_start"], lot["mfg_days"]))
         else:
             load = None
-        total = totals.get(key, 0.0)
+        total = totals.get(a["lot_id"], 0.0)
         a.update(moq_ok_after_fix=bool(a["qty_after_fix"] == 0 or a["qty_after_fix"] >= moq),
                  factory_total_after=total, mpq=mpq,
                  mpq_ok_after_fix=bool(total == 0 or total >= mpq),
@@ -157,13 +180,13 @@ def move_load(planner: Planner, run_id: str, lot_id: str, target: str) -> dict:
     qty = float(lot["consolidated_qty"])
     source = lot["assigned_factory"]
     ledger = planner.snapshots[run_id].copy()
-    src_weeks = ledger.weeks_for(lot["production_start"], int(lot["mfg_days"]))
+    src_weeks = ledger.weeks_for(lot["production_start"], lot["mfg_days"])
     source_before = ledger.utilization(source, src_weeks)
-    if lot["auto_decision"] == "Buy":  # review lots were never placed in the ledger
-        ledger.remove(source, lot["production_start"], int(lot["mfg_days"]), qty)
+    if lot.get("decision",lot["auto_decision"]) == "Buy":
+        ledger.remove(source, lot["production_start"], lot["mfg_days"], qty)
     m, t = planner.lot_lead_times(ids, target)
     release = lot["earliest_rdd"] - pd.Timedelta(days=m + t)
-    start = max(release, r.buy_date)
+    start = r.buy_date
     weeks = ledger.weeks_for(start, m)
     return {"mfg": m, "trans": t, "release": release, "start": start,
             "source_before_pct": float(source_before),
@@ -179,12 +202,12 @@ def delay_factory(planner: Planner, run_id: str, factory: str, days: int) -> dic
     prs = planner.prs
     rows, late_prs = [], []
     for lot in lots.itertuples():
-        new_arrival = lot.expected_arrival + pd.Timedelta(days=days)
+        new_arrival = lot.suggested_rdd + pd.Timedelta(days=days)
         p = prs.loc[lot.pr_ids.split(",")]
         late = p[p["rdd_original"] < new_arrival]
         rows.append({"lot_id": lot.lot_id, "article_id": lot.article_id,
                      "market_destination": lot.market_destination, "qty": lot.consolidated_qty,
-                     "rdd": lot.earliest_rdd, "arrival_before": lot.expected_arrival,
+                     "rdd": lot.earliest_rdd, "arrival_before": lot.suggested_rdd,
                      "arrival_after": new_arrival, "late_after": bool(len(late)),
                      "late_units": float(late["requested_qty"].sum()),
                      "nsv_at_risk_usd": float(late["nsv"].sum()), "decision_type": "manual"})
@@ -213,7 +236,7 @@ def swap_factory(planner: Planner, run_id: str, lot_id: str, target: str) -> dic
     cfg = planner.cfg
     ids = lot["pr_ids"].split(",")
     move = move_load(planner, run_id, lot_id, target)
-    arrival = move["start"] + pd.Timedelta(days=move["mfg"] + move["trans"])
+    arrival = delivery_date(move["start"],move["mfg"],move["trans"])
     mult = float(planner.factories.loc[target, "cost_multiplier"])
     new_cost = lot["consolidated_qty"] * lot["unit_cost_usd"] * mult
     m0, t0 = planner.lot_lead_times(ids, lot["assigned_factory"])
@@ -221,6 +244,7 @@ def swap_factory(planner: Planner, run_id: str, lot_id: str, target: str) -> dic
     mpq = mpq_for(lot["category"], cfg["quantities"]["mpq"])
     same = _bought(lots.reset_index())
     same = same[same["article_id"] == lot["article_id"]]
+    same=same.loc[same["pr_ids"].map(lambda s: planner.rdd_span_ok(ids+s.split(","))).astype(bool)]
     at = lambda f: float(same.loc[same["assigned_factory"] == f, "consolidated_qty"].sum())
     qty = float(lot["consolidated_qty"]) if lot["auto_decision"] == "Buy" else 0.0
     source_total = at(lot["assigned_factory"]) - qty
@@ -233,7 +257,7 @@ def swap_factory(planner: Planner, run_id: str, lot_id: str, target: str) -> dic
         "cost_delta_usd": float(new_cost - lot["total_cost_usd"]),
         "cost_multiplier_before": float(lot["cost_multiplier"]), "cost_multiplier_after": mult,
         "lead_time_delta_days": (move["mfg"] + move["trans"]) - (m0 + t0),
-        "arrival_before": lot["expected_arrival"], "arrival_after": arrival,
+        "arrival_before": lot["suggested_rdd"], "arrival_after": arrival,
         "on_time_after": bool(arrival <= lot["earliest_rdd"]),
         "moq_still_met": bool(lot["consolidated_qty"] >= moq),
         "target_load_before_pct": round(move["target_before_pct"], 1),

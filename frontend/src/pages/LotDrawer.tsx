@@ -56,7 +56,7 @@ export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; run
     queryFn: () => api.lotRequisitions(runId, lot!.lot_id),
     enabled: !!lot && tab === "requisitions",
   });
-  const refresh = () => qc.invalidateQueries({ queryKey: ["plan", runId] });
+  const refresh = () => qc.invalidateQueries();
   const save = useMutation({
     mutationFn: () => api.setLot(runId, lot!.lot_id, decision, factory, note),
     onSuccess: () => { refresh(); onClose(); },
@@ -80,8 +80,11 @@ export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; run
         <Stat label="Production cost" value={money(lot.total_cost_usd)} />
         <Stat label="Buying window" value={<span className="text-base">{lot.buying_window} <span className="text-xs font-normal text-muted">{lot.plan_status}</span></span>} />
         <Stat label="Arrival vs RDD" tone={lot.on_time ? "good" : "bad"}
-          value={<span className="text-base">{date(lot.expected_arrival)} <span className="text-xs font-normal text-muted">RDD {date(lot.earliest_rdd)}</span></span>} />
+          value={<span className="text-base">{date(lot.suggested_rdd)} <span className="text-xs font-normal text-muted">RDD {date(lot.earliest_rdd)}</span></span>} />
+        <Stat label="Inventory exposure vs earliest original RDD"
+          value={<span className="text-base">{lot.inventory_exposure_days} days <span className="text-xs font-normal text-muted">{lot.inventory_exposure_days < 0 ? `(${Math.abs(lot.inventory_exposure_days)} days early)` : lot.inventory_exposure_days > 0 ? "(late)" : "(unchanged)"}</span></span>} />
       </div>
+      <p className="mb-3 text-xs text-muted">Lead times: {lot.lead_time_source}. Exposure is a signed date difference, not a storage-cost estimate. Individual PR differences appear in the requisitions tab.</p>
 
       <div className="mb-5 rounded-xl border border-line p-3.5">
         <div className="mb-2.5 flex items-baseline justify-between gap-2 text-xs">
@@ -146,6 +149,7 @@ export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; run
           { key: "channel_id", header: "Channel", render: (r) => (r.channel_id === "01" ? "Wholesale" : "DTC") },
           { key: "requested_qty", header: "Units", align: "right", render: (r) => int(r.requested_qty) },
           { key: "rdd_original", header: "RDD", render: (r) => date(r.rdd_original) },
+          { key: "inventory_exposure_days", header: "Exposure days", render: (r) => `${r.inventory_exposure_days} (${r.inventory_exposure_days < 0 ? "early" : r.inventory_exposure_days > 0 ? "late" : "unchanged"})` },
           { key: "customer_id", header: "Customer", render: (r) => r.customer_id ?? "Forecast" },
           { key: "nsv", header: "Sales value", align: "right", render: (r) => money(r.nsv) },
         ]} />
@@ -163,8 +167,8 @@ export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; run
           </p>
           {lot.auto_decision === "Review" && (
             <p className="rounded-lg bg-warn-soft p-3 text-sm text-warn">
-              No certified factory had room for this lot. Choosing Buy approves it although the factory will be over its limit;
-              switching to a factory with room or No-Go are the alternatives.
+              This lot needs review. Choosing Buy rechecks capacity and quantities; it cannot override the hard ceiling.
+              You can try another certified factory, delay, or select No-Go.
             </p>
           )}
           <div>

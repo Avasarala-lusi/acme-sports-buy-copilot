@@ -6,7 +6,7 @@ from sim import scenarios
 from tests.conftest import needs_data
 
 pytestmark = needs_data
-RUN = "MRP-WK020"
+RUN = "MRP-WK019"
 HELD = "KEY-AMAZON"  # largest account in this run (data v5 names every DTC account)
 
 
@@ -40,7 +40,7 @@ def test_factory_switch_matches_scenario_cost(planner, store):
     expected = scenarios.swap_factory(planner, RUN, lot["lot_id"], target)
     assert eff["assigned_factory"] == target
     assert eff["total_cost_usd"] == pytest.approx(expected["cost_after_usd"])
-    assert eff["expected_arrival"] == expected["arrival_after"]
+    assert eff["suggested_rdd"] == expected["arrival_after"]
 
 
 def test_uncertified_switch_is_rejected(planner, store):
@@ -83,15 +83,15 @@ def test_draft_weeks_cannot_be_decided(planner, store):
         store.set_lot(planner, "MRP-WK021", lot, "No-Go")
 
 
-def test_review_lot_waits_for_a_planner_and_can_be_approved(planner, store):
+def test_manual_approval_cannot_waive_hard_capacity_limit(planner, store):
     run = next(r for r in planner.buying_runs() if (planner.results[r].lots["auto_decision"] == "Review").any())
-    lot = planner.results[run].lots.query("auto_decision == 'Review'").iloc[0]
+    lot = planner.results[run].lots.query("auto_decision == 'Review' and util_after_pct > 100").iloc[0]
     eff = effective_lots(planner, run, store).set_index("lot_id")
     assert eff.loc[lot["lot_id"], "decision"] == "Review"
     assert lot["lot_id"] not in set(effective_fact_table(planner, run, store)["suggestion_id"].str[4:])
     store.set_lot(planner, run, lot["lot_id"], "Buy")
     eff = effective_lots(planner, run, store).set_index("lot_id")
-    assert eff.loc[lot["lot_id"], "decision"] == "Buy" and eff.loc[lot["lot_id"], "decision_type"] == "manual"
-    assert lot["lot_id"] in set(effective_fact_table(planner, run, store)["suggestion_id"].str[4:])
+    assert eff.loc[lot["lot_id"], "decision"] == "Review" and eff.loc[lot["lot_id"], "decision_type"] == "manual"
+    assert lot["lot_id"] not in set(effective_fact_table(planner, run, store)["suggestion_id"].str[4:])
     store.revert_lot(run, lot["lot_id"])
     assert effective_lots(planner, run, store).set_index("lot_id").loc[lot["lot_id"], "decision"] == "Review"

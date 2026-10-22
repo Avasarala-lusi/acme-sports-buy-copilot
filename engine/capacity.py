@@ -6,8 +6,9 @@ table is not used for planning decisions.
 from collections import defaultdict
 from copy import deepcopy
 from datetime import date
+import pandas as pd
 
-from engine.calendar import production_weeks
+from engine.calendar import manufacturing_weights
 
 
 def _weekly_units():
@@ -26,26 +27,33 @@ class CapacityLedger:
         return new
 
     def weeks_for(self, start, mfg_days: int) -> list[date]:
-        weeks = production_weeks(start, mfg_days)
+        weeks = [w for w, _ in manufacturing_weights(pd.Timestamp(start), float(mfg_days))]
         return weeks if self.spread else weeks[:1]
 
     def utilization(self, factory: str, weeks: list[date]) -> float:
         """Highest utilisation (%) across the given weeks."""
         cap = self.capacity[factory]
-        return max(self.units[factory][w] / cap * 100 for w in weeks)
+        return max((self.units[factory].get(w, 0.0) / cap * 100 for w in weeks), default=0.0)
+
+    def allocations(self, start, mfg_days, qty):
+        weights = manufacturing_weights(pd.Timestamp(start), float(mfg_days))
+        if not self.spread:
+            return [(weights[0][0], qty)]
+        allocated = [(w, qty * weight) for w, weight in weights]
+        # Preserve all units despite floating-point arithmetic; removal uses identical weights.
+        w, _ = allocated[-1]
+        allocated[-1] = (w, qty - sum(n for _, n in allocated[:-1]))
+        return allocated
 
     def utilization_with(self, factory: str, start, mfg_days: int, qty: float) -> float:
         """Highest utilisation (%) over the lot's production weeks if the lot were added."""
-        weeks = self.weeks_for(start, mfg_days)
-        per_week = qty / len(weeks)
         cap = self.capacity[factory]
-        return max((self.units[factory][w] + per_week) / cap * 100 for w in weeks)
+        return max((self.units[factory].get(w, 0.0) + n) / cap * 100
+                   for w, n in self.allocations(start, mfg_days, qty))
 
     def add(self, factory: str, start, mfg_days: int, qty: float) -> None:
-        weeks = self.weeks_for(start, mfg_days)
-        per_week = qty / len(weeks)
-        for w in weeks:
-            self.units[factory][w] += per_week
+        for w, n in self.allocations(start, mfg_days, qty):
+            self.units[factory][w] += n
 
     def remove(self, factory: str, start, mfg_days: int, qty: float) -> None:
         self.add(factory, start, mfg_days, -qty)

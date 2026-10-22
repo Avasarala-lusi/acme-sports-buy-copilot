@@ -1,5 +1,9 @@
 # Capacity validation checklist
 
+> This earlier checklist contains superseded last-chance and calendar behavior.
+> Use `docs/client_rule_updates.md` and the current tests. The hard ceiling now includes
+> last-chance and manual purchases; capacity is business-day-weighted, not equal weekly blocks.
+
 ## Current behavior
 
 Factory routing checks the projected utilization **including the proposed lot**. For each certified option,

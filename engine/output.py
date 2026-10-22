@@ -17,6 +17,10 @@ SPEC_COLUMNS = ["suggestion_id", "run_id", "article_id", "market_destination", "
 
 def fact_buy_plan_suggestions(planner: Planner, run_ids: list[str] | None = None) -> pd.DataFrame:
     """The spec's output table (Table 9): committed purchases only."""
+    if run_ids is None:
+        planner.plan_all()
+    else:
+        planner.plan_through(max(run_ids,key=planner.run_index.get))
     lots = planner.bought_lots()
     if run_ids is not None:
         lots = lots[lots["run_id"].isin(run_ids)]

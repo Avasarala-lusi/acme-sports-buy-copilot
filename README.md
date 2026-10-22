@@ -1,16 +1,18 @@
 # Acme Sports Buy Planner
 
 Team Vantage (University at Buffalo) × Globant. A buy-planning engine and app for the Acme Sports
-supply-chain challenge: weekly drafts, monthly purchases. Runs on the client's data v5.
+supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client's data v5.
 
 ## Current capabilities
 - **Rule engine:** the six buy-plan rules, factory certification and capacity, with a reason for every lot.
-  Purchases are committed once a month in the buying window; the weeks in between show a draft of it.
+  Purchases are committed in configured MID/EOM buying runs; intervening weeks preview the next window.
   Capacity is checked with each new lot included, and lots that fit no certified factory go to planner review.
-  Writes `fact_buy_plan_suggestions` for all 23 buying windows in the 100 MRP runs.
+  Under the provisional calendar there are 46 buying runs in the 100 MRP runs.
+  Exact cutoff-to-PO dates remain configurable assumptions, not a newly confirmed client calendar.
 - **Web app** (`frontend/`): buy plan with rule explanations and Go/No-Go decisions, what-if scenarios, pull-forward, capacity, factory network map, export and data checks.
 - **What-if scenarios:** hold a customer, check minimums, delay production, switch factories.
-- **Go/No-Go decisions:** Buy / No-Go / Delay, factory switches and customer holds saved as manual changes, reversible.
+- **Go/No-Go decisions:** saved changes replay later demand and capacity. Hold/Delay applies to one window;
+  No-Go cancels selected PRs. Approvals and last-chance status never bypass the 100% ceiling.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows; moves are tested together on one ledger with MOQ and MPQ checks.
 - **Trend notebook** (`notebooks/trend_analysis.ipynb`): the five required analyses over 100 weeks: seasonal demand, factory utilisation and backup triggers, pull-forward opportunities, forecast vs confirmed-order coverage, and sales value by market and credit rating.
 - **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan.
@@ -18,6 +20,10 @@ supply-chain challenge: weekly drafts, monthly purchases. Runs on the client's d
   planning terms in `docs/glossary.md`; capacity review checklist in `docs/capacity_validation_checklist.md`.
 
 ## Roadmap
+
+Current rule details and provisional defaults: `docs/client_rule_updates.md`. Old worked examples and
+numeric comparisons must be regenerated before reuse. `suggested_rdd` is the single proposed arrival date.
+
 Data health checks, load forecast, on-time probability, network optimiser with a cost-vs-service slider, planner
 benchmark and disruption drill; stretch: learned thresholds and plain-English questions.
 
@@ -40,8 +46,9 @@ jupyter notebook notebooks/trend_analysis.ipynb  # the five trend analyses
 python scripts/build_worked_examples.py     # regenerate the worked examples
 pytest                                     # run the remaining automated tests
 ```
-The first plan takes about 25 seconds; it is cached in `outputs/` and rebuilt automatically when the code or
-config changes.
+The first load processes all 100 runs and may take a while; the automatic plan is cached in `outputs/`
+and rebuilt when engine code, configuration or input data changes. Saved decisions use a separate
+replay and never alter the cached automatic reference.
 
 ## Updating to the latest version
 ```bash

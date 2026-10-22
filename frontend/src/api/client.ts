@@ -40,6 +40,8 @@ export const api = {
   network: (run: string) => request<Network>(`/network/${run}`),
   features: () => request<Features>("/features"),
   pullForward: (run: string) => request<PullForward>(`/pull-forward/${run}`),
+  acceptPull: (run: string, pr_ids: string[], target_run_id: string) =>
+    request<{scheduled_for: string}>(`/pull-forward/${run}/accept`, {method: "POST", ...body({pr_ids, target_run_id})}),
   capacity: (run: string) => request<CapacityRow[]>(`/capacity/${run}`),
 
   holdScenario: (run: string, customer_id: string) =>

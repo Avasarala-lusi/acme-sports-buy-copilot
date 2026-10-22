@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { Badge, Card, ErrorBox, Loading, PageHeader, SectionTitle, cx } from "../components/ui";
@@ -11,6 +11,11 @@ const cellTone = (u: number, threshold: number) =>
 
 export function PullForward() {
   const { runId } = useRun();
+  const qc = useQueryClient();
+  const accept = useMutation({
+    mutationFn: (r: {pr_ids: string[]; target_run_id: string | null}) => api.acceptPull(runId,r.pr_ids,r.target_run_id!),
+    onSuccess: () => qc.invalidateQueries(),
+  });
   const [onlyActionable, setOnlyActionable] = useState(true);
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, staleTime: Infinity });
   const pf = useQuery({ queryKey: ["pullForward", runId], queryFn: () => api.pullForward(runId) });
@@ -74,12 +79,16 @@ export function PullForward() {
       <SectionTitle hint={`${(pf.data?.recommendations ?? []).filter((r) => r.actionable).length} actionable of ${(pf.data?.recommendations ?? []).length} reviewed`}>
         Recommendations
       </SectionTitle>
+      {accept.error && <ErrorBox error={accept.error} />}
+      {accept.isSuccess && <p className="mb-3 text-sm text-muted">Accepted for {accept.data.scheduled_for}. Later plans and capacity will replay this decision.</p>}
       <label className="mb-3 inline-flex items-center gap-2 text-sm text-muted">
         <input type="checkbox" checked={onlyActionable} onChange={(e) => setOnlyActionable(e.target.checked)} className="accent-[#b04812]" />
         Only actionable (an earlier window has room, and MOQ and MPQ still hold after the move)
       </label>
       <DataTable rows={recs} rowKey={(r) => `${r.factory_id}-${r.overloaded_window}-${r.article_id}-${r.market_destination}`}
         emptyText="No actionable pull-forward this week" columns={[
+          {key: "accept", header: "Planner decision", render: (r) => r.actionable && r.target_run_id ?
+            <button disabled={accept.isPending} onClick={() => accept.mutate(r)} className="rounded border border-line px-2 py-1 text-xs disabled:opacity-50">Accept move</button> : <span className="text-xs text-muted">Review failed checks</span>},
           { key: "factory_id", header: "Factory" },
           { key: "overloaded_window", header: "Overloaded window", render: (r) => <>{r.overloaded_window} <Badge tone="bad">{r.overloaded_util_pct.toFixed(0)}%</Badge></> },
           { key: "article_id", header: "Article" },

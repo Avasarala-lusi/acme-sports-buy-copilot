@@ -7,7 +7,7 @@ from sim import scenarios
 from tests.conftest import needs_data
 
 pytestmark = needs_data
-RUN = "MRP-WK020"
+RUN = "MRP-WK019"
 HELD = "KEY-AMAZON"  # largest account in this run (data v5 names every DTC account)
 
 
@@ -111,10 +111,9 @@ def test_swap_capacity_is_measured_after_the_move(planner):
     ledger = planner.snapshots[RUN].copy()
     ledger.remove(lot["assigned_factory"], lot["production_start"], int(lot["mfg_days"]), lot["consolidated_qty"])
     m, t = planner.lot_lead_times(lot["pr_ids"].split(","), target)
-    start = max(lot["earliest_rdd"] - pd.Timedelta(days=m + t), planner.results[RUN].buy_date)
+    start = planner.results[RUN].buy_date
     weeks = ledger.weeks_for(start, m)
-    per_week = lot["consolidated_qty"] / len(weeks)
-    expected = max((ledger.units[target][w] + per_week) / ledger.capacity[target] * 100 for w in weeks)
+    expected = ledger.utilization_with(target,start,m,lot["consolidated_qty"])
 
     assert r["target_utilization_pct"] == pytest.approx(expected, abs=0.05)
     assert r["target_utilization_pct"] > r["target_load_before_pct"]

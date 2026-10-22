@@ -1,5 +1,9 @@
 # Acme Sports Buy Planner: technical documentation
 
+> Historical description below predates the latest client-rule alignment. Use
+> `docs/client_rule_updates.md` and the settings view for current behavior. Old 23-window counts,
+> numeric comparisons and last-chance overload exceptions are not current validation results.
+
 Team Vantage · University at Buffalo × Globant · October 2026
 
 This document covers the scope agreed with the client: a buy-plan engine (weekly drafts, monthly purchases) that applies

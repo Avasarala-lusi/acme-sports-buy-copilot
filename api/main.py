@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from engine import pull_forward
+from engine.calendar import window_label
 from engine.accounting import accounting_report, rule_violations
 from engine.metrics import comparison_table
 from engine.output import fact_buy_plan_suggestions, get_planner
@@ -31,8 +32,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 
 
 @lru_cache
-def planner():
+def automatic_planner():
     return get_planner()
+
+
+def planner():
+    return store().replay(automatic_planner())
 
 
 def store() -> OverrideStore:
@@ -82,7 +87,7 @@ def _window_info(run_id: str) -> dict:
     po = pd.to_datetime(p.runs["po_execution_date"]).dt.normalize()
     commit = p.runs.loc[po == r.buy_date, "run_id"]
     return {"is_buying_run": r.is_buying_run, "plan_status": r.plan_status,
-            "buying_window": f"WIN-{r.buy_date:%Y-%m}", "buy_date": r.buy_date.isoformat(),
+            "buying_window": window_label(r.buy_date), "buy_date": r.buy_date.isoformat(),
             "next_buy_date": r.next_buy_date.isoformat(),
             "buying_run_id": commit.iloc[0] if len(commit) else None}
 
@@ -128,9 +133,9 @@ def features():
             "benchmark": False, "ask": False, "data_health": False}
 
 
-@lru_cache
 def _checks():
     p = planner()
+    p.plan_all()
     rep = accounting_report(p)
     rep["rule_violations"] = len(rule_violations(p))
     rep["comparison"] = _records(comparison_table(p))
@@ -156,7 +161,9 @@ def plan(run_id: str):
     waiting_units = float(p.prs.loc[r.open_prs, "requested_qty"].sum()) if r.open_prs else 0.0
     return {"run_id": run_id, **_window_info(run_id),
             "kpis": k,
-            "kpis_automatic": _kpis(r.lots, r.outcomes),
+            "kpis_automatic": _kpis(automatic_planner().run_result(run_id).lots,
+                                    automatic_planner().run_result(run_id).outcomes),
+            "decision_issues": p.decision_issues,
             "units": {"bought": k["units_bought"], "review": k["review_units"], "unresolved": k["unresolved_units"],
                       "future": k["forecast_excluded_units"], "waiting": waiting_units},
             "manual_changes": s.count(run_id),
@@ -167,7 +174,6 @@ def plan(run_id: str):
             "lots": _records(eff)}
 
 
-@lru_cache
 def _trend():
     """Automatic-plan KPIs for every buying window, for the trend lines on the buy plan."""
     p = planner()
@@ -175,7 +181,8 @@ def _trend():
     for run_id in p.buying_runs():
         r = p.run_result(run_id)
         k = _kpis(r.lots, r.outcomes)
-        rows.append({"run_id": run_id, "buying_window": f"WIN-{r.buy_date:%Y-%m}", **k})
+        from engine.calendar import window_label
+        rows.append({"run_id": run_id, "buying_window": window_label(r.buy_date), **k})
     return rows
 
 
@@ -225,9 +232,11 @@ def lot_requisitions(run_id: str, lot_id: str):
     lots = p.run_result(run_id).lots.set_index("lot_id")
     if lot_id not in lots.index:
         raise HTTPException(404, f"unknown lot {lot_id}")
-    ids = lots.loc[lot_id, "pr_ids"].split(",")
-    return _records(p.prs.loc[ids, ["pr_id", "size_id", "channel_id", "requested_qty", "rdd_original",
-                                    "customer_id", "nsv"]].reset_index(drop=True))
+    ids = list(filter(None,lots.loc[lot_id, "pr_ids"].split(",")))
+    out = p.prs.loc[ids, ["pr_id", "size_id", "channel_id", "requested_qty", "rdd_original",
+                                    "customer_id", "nsv"]].reset_index(drop=True)
+    out["inventory_exposure_days"] = (lots.loc[lot_id,"suggested_rdd"]-out["rdd_original"]).dt.days
+    return _records(out)
 
 
 # ------------------------------------------------------------------ what-if
@@ -316,7 +325,6 @@ def revert_week(run_id: str):
 
 
 # ------------------------------------------------------------------ analysis views
-@lru_cache(maxsize=128)
 def _pull_forward(run_id: str):
     p = planner()
     return {"windows": _records(pull_forward.window_utilization(p, run_id)),
@@ -329,10 +337,27 @@ def pull_forward_view(run_id: str):
     return _pull_forward(run_id)
 
 
+class PullDecision(BaseModel):
+    pr_ids: list[str]
+    target_run_id: str
+
+
+@app.post("/pull-forward/{run_id}/accept")
+def accept_pull_forward(run_id: str, body: PullDecision):
+    _check_run(run_id)
+    _check_run(body.target_run_id)
+    try:
+        store().accept_pull(planner(),run_id,body.pr_ids,body.target_run_id)
+    except (ValueError,KeyError) as e:
+        raise HTTPException(400,str(e))
+    return {"scheduled_for":body.target_run_id,"pr_ids":body.pr_ids}
+
+
 @app.get("/capacity/{run_id}")
 def capacity(run_id: str, weeks_before: int = 4, weeks_after: int = 36):
     _check_run(run_id)
     p = planner()
+    p.plan_through(run_id)
     t = p.snapshots[run_id].table()
     t["week"] = pd.to_datetime(t["week"])
     start = pd.Timestamp(p.runs.set_index("run_id").loc[run_id, "mrp_freeze_datetime_utc"]).normalize()

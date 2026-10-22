@@ -31,6 +31,28 @@ def settings_items(cfg: dict) -> list[dict]:
         ("Lead time at another factory", "Midpoint of the factory's range", "Assumption"),
         ("Capacity use over time", "Spread over manufacturing weeks", "Assumption"),
     ]
+    replacements = {
+        "Buying window": ("MID/EOM; latest PO weekday on/before 15th and last PO weekday of month",
+                          "Assumption: exact date mapping pending confirmation"),
+        "Factory limit": (f"{cap['hard_limit_pct']}% including manual approvals and last-chance", "Client confirmed"),
+        "No certified factory has room": ("Keep visible for planner review; no assumed overtime", "Client confirmed"),
+        "Last-chance conflicts": ("Priority first, but never bypass capacity or confirmation conflicts", "Client guidance; user review policy"),
+        "Backup factory": ("Factory chain with certification checked at every step", "Client confirmed"),
+        "Lead time at another factory": ("Arithmetic midpoint; supplied/estimated source shown", "Client confirmed fallback"),
+        "Capacity use over time": ("Business-day-proportional weights in [start, completion); calendar duration",
+                                   "Client proportional rule; endpoints/holidays are assumptions"),
+        "DTC customers": ("Separate named customer accounts", "Client confirmed"),
+        "15-day grouping": ("Earliest-to-latest original RDD, including MPQ and moves", "Client confirmed"),
+        "MOQ fix after a hold": ("Same article/market/date span; proposal until accepted", "Client market-separation rule"),
+    }
+    rows=[(t,*replacements[t]) if t in replacements else (t,s,st) for t,s,st in rows]
+    rows.extend([
+        ("Priority ties",cfg.get("priority",{}).get("tie_break","revenue_then_rdd"),"Assumption: NSV vs RDD order"),
+        ("MPQ", "Same article, factory, buying window and 15-day RDD span; category chooses threshold", "Client confirmed"),
+        ("Suggested RDD", "PO + manufacture + transit; signed exposure vs original RDD", "User adopted"),
+        ("Hold / Delay", "One-window scope; outstanding demand returns later; No-Go cancels", "Assumption: reversible saved decisions"),
+        ("Pull-forward source", "Original scheduled buying run_id, not intake run", "Assumption: confirm ID meaning"),
+    ])
     return [{"topic": t, "setting": s, "status": st} for t, s, st in rows]
 
 

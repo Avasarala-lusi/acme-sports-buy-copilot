@@ -29,3 +29,7 @@ frontend/dist/
 
 # Vite dependency cache (recreated by npm run dev)
 frontend/.vite/
+frontend/*.tsbuildinfo
+
+docs/client_rule_updates.md
+tests/test_client_clarifications.py

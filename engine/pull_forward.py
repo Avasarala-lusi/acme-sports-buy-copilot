@@ -23,6 +23,7 @@ from engine.calendar import weeks_between, window_label
 from engine.capacity import CapacityLedger
 from engine.planner import Planner
 from engine.rules.quantities import mpq_for
+from engine.rules.grouping import group_by_rdd
 
 
 def _edges(planner: Planner, run_id: str) -> list[pd.Timestamp]:
@@ -58,10 +59,11 @@ def projected_load(planner: Planner, run_id: str) -> tuple[CapacityLedger, pd.Da
     ledger = planner.snapshots[run_id].copy()
     open_ids = r.open_prs
     opn = planner.prs.loc[open_ids].copy() if open_ids else planner.prs.iloc[0:0].copy()
+    opn = opn[~((opn["channel_id"] == "01") & ~opn["has_order"] & ~opn["early_buy"])]
     starts, mfgs = [], []
     for pr in opn.itertuples():
         m, _ = planner.lead_times(planner.rows[pr.pr_id], pr.primary)
-        start = max(pr.release_primary, r.buy_date)
+        start = max(pd.Timestamp(planner.calendar.on_or_before(pr.release_primary)), r.buy_date)
         ledger.add(pr.primary, start, m, pr.requested_qty)
         starts.append(start)
         mfgs.append(m)
@@ -90,7 +92,9 @@ def _committed_quantities(planner: Planner, run_id: str, edges) -> tuple[dict, d
     if len(past):
         past = past[past["run_id"].map(planner.run_index) < k]
     this = planner.run_result(run_id).lots
-    this = this[this["auto_decision"] == "Buy"] if len(this) else this
+    if len(this):
+        decision=this["decision"].fillna(this["auto_decision"]) if "decision" in this else this["auto_decision"]
+        this=this[decision=="Buy"]
     lots = pd.concat([x for x in (past, this) if len(x)]) if len(past) or len(this) else past
     by_market, by_factory = defaultdict(float), defaultdict(float)
     for lot in lots.itertuples() if len(lots) else []:
@@ -124,8 +128,11 @@ def recommendations(planner: Planner, run_id: str) -> pd.DataFrame:
             if window_stats(work, f, windows[i])["peak_pct"] < threshold:
                 continue
             sel = opn[(opn["primary"] == f) & (opn["window"] == i)]
-            groups = sorted(sel.groupby(["article_id", "market_destination"]),
-                            key=lambda kv: -kv[1]["requested_qty"].sum())
+            groups = []
+            for key, members in sel.groupby(["article_id", "market_destination"]):
+                for indices in group_by_rdd(list(members["rdd_original"]),cfg["grouping"]["window_days"]):
+                    groups.append((key,members.iloc[indices]))
+            groups.sort(key=lambda kv: planner.priority_key(list(kv[1]["pr_id"])))
             for (article, market), g in groups:
                 source_peak = window_stats(work, f, windows[i])["peak_pct"]
                 if source_peak < threshold:
@@ -137,10 +144,15 @@ def recommendations(planner: Planner, run_id: str) -> pd.DataFrame:
                 backup = g["backup"].iloc[0]
                 backup = backup if isinstance(backup, str) else None  # the last resort has no backup
                 row = {
+                    "pr_ids": list(g["pr_id"]),
                     "factory_id": f, "overloaded_window": window_label(edges[i]),
                     "overloaded_util_pct": round(source_peak, 1),
                     "article_id": article, "market_destination": market, "n_prs": len(g), "units": qty,
                     "target_window": None, "days_earlier": 0,
+                    "target_run_id": None,
+                    "source_run_id": planner.window_run.get(edges[i]),
+                    "certification_ok": bool(f in planner.certified[article]),
+                    "window_visibility_ok": False, "earliness_ok": False,
                     "capacity_ok": False, "moq_ok_for_market": False, "mpq_target_ok": False,
                     "mpq_source_ok": bool(mpq_source_ok),
                     "source_peak_after_pct": round(source_peak, 1),
@@ -162,8 +174,41 @@ def recommendations(planner: Planner, run_id: str) -> pd.DataFrame:
                                    and window_stats(trial, f, windows[j])["peak_pct"] < threshold)
                     moq_ok = by_market[(article, market, j)] + qty >= moq
                     mpq_ok = by_factory[(article, f, j)] + qty >= mpq
+                    # Minimums may only combine PRs whose full RDD span is <=15 days.
+                    lo = g["rdd_original"].min()
+                    hi = lo + pd.Timedelta(days=cfg["grouping"]["window_days"])
+                    def eligible_units(index, market_only=False, excluding=()):
+                        members = opn[(opn["window"] == index) & (opn["primary"] == f)
+                                      & (opn["article_id"] == article)
+                                      & opn["rdd_original"].between(lo,hi)
+                                      & ~opn["pr_id"].isin(excluding)]
+                        if market_only:
+                            members=members[members["market_destination"]==market]
+                        total=float(members["requested_qty"].sum())
+                        planned=planner.run_result(run_id).lots
+                        for lot in planned.itertuples() if len(planned) else []:
+                            if getattr(lot,"decision",lot.auto_decision)!="Buy" or lot.article_id!=article or lot.assigned_factory!=f:
+                                continue
+                            if _window_index(edges,lot.production_start)!=index:
+                                continue
+                            ids=lot.pr_ids.split(",")
+                            if planner.rdd_span_ok(list(g["pr_id"])+ids) and (not market_only or lot.market_destination==market):
+                                total+=lot.consolidated_qty
+                        return total
+                    moq_ok = eligible_units(j,True)+qty >= moq
+                    mpq_ok = eligible_units(j)+qty >= mpq
+                    source_qty = eligible_units(i,False,list(g["pr_id"]))
+                    mpq_source_ok = source_qty==0 or source_qty>=mpq
+                    source_market=eligible_units(i,True,list(g["pr_id"]))
+                    source_moq_ok=source_market==0 or source_market>=moq
+                    visible = edges[j] in planner.window_run and all(
+                        planner.run_index[planner.rows[p]["run_id"]] <= planner.run_index[planner.window_run[edges[j]]]
+                        for p in g["pr_id"]) and edges[i] in planner.window_run
+                    early = all(planner.eligible_pull(p,edges[j]) for p in g["pr_id"])
                     checks = {"capacity": capacity_ok, "market MOQ": moq_ok, "factory MPQ": mpq_ok,
-                              "MPQ left in the overloaded window": mpq_source_ok}
+                              "MPQ left in the overloaded window": mpq_source_ok,
+                              "source market MOQ":source_moq_ok,"certification":row["certification_ok"],
+                              "existing window and known PRs":visible,"four-window earliness":early}
                     if all(checks.values()):
                         target_before = window_stats(work, f, windows[j])["peak_pct"]
                         work = trial
@@ -172,11 +217,15 @@ def recommendations(planner: Planner, run_id: str) -> pd.DataFrame:
                         by_market[(article, market, i)] -= qty
                         by_market[(article, market, j)] += qty
                         row.update(target_window=window_label(edges[j]),
+                                   target_run_id=planner.window_run[edges[j]],
+                                   window_visibility_ok=visible,earliness_ok=early,mpq_source_ok=mpq_source_ok,
                                    days_earlier=int((g["start"].min() - edges[j]).days),
                                    capacity_ok=True, moq_ok_for_market=True, mpq_target_ok=True,
                                    source_peak_after_pct=round(window_stats(work, f, windows[i])["peak_pct"], 1),
                                    target_peak_before_pct=round(target_before, 1),
                                    target_peak_after_pct=round(window_stats(work, f, windows[j])["peak_pct"], 1))
+                        opn.loc[g.index,"window"]=j
+                        opn.loc[g.index,"start"]=edges[j]
                         break
                     if j == i - 1:  # report the checks of the closest window
                         row.update(capacity_ok=capacity_ok, moq_ok_for_market=moq_ok, mpq_target_ok=mpq_ok)

@@ -41,7 +41,10 @@ export interface Lot {
   backup_routed: boolean;
   release_date: string;
   production_start: string;
-  expected_arrival: string;
+  inventory_exposure_days: number;
+  inventory_exposure_basis: string;
+  lead_time_source: string;
+  trans_days: number;
   on_time: boolean;
   on_time_units: number;
   unit_cost_usd: number;
@@ -86,6 +89,7 @@ export interface Plan {
   kpis: Kpis;
   kpis_automatic: Kpis;
   manual_changes: number;
+  decision_issues: string[];
   counts: { unresolved: number; future: number; review: number; waiting: number };
   units: { bought: number; review: number; unresolved: number; future: number; waiting: number };
   lots: Lot[];
@@ -103,6 +107,7 @@ export interface Requisition {
 }
 
 export interface LotRequisition {
+  inventory_exposure_days: number;
   pr_id: string;
   size_id: string;
   channel_id: "01" | "02";
@@ -225,6 +230,12 @@ export interface PullForward {
     peak_utilization_pct: number;
   }[];
   recommendations: {
+    pr_ids: string[];
+    target_run_id: string | null;
+    source_run_id: string | null;
+    certification_ok: boolean;
+    window_visibility_ok: boolean;
+    earliness_ok: boolean;
     factory_id: string;
     overloaded_window: string;
     overloaded_util_pct: number;

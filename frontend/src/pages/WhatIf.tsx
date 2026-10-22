@@ -69,8 +69,7 @@ function HoldScenario({ runId, draft }: { runId: string; draft: boolean }) {
   const apply = useMutation({
     mutationFn: () => (held ? api.releaseHold(runId, customer) : api.hold(runId, customer)),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["plan", runId] });
-      qc.invalidateQueries({ queryKey: ["overrides", runId] });
+      qc.invalidateQueries();
     },
   });
 
@@ -212,7 +211,7 @@ function SwapScenario({ runId, lots, draft }: { runId: string; lots: Lot[]; draf
   });
   const apply = useMutation({
     mutationFn: () => api.setLot(runId, lot!.lot_id, lot!.decision, target, ""),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", runId] }),
+    onSuccess: () => qc.invalidateQueries(),
   });
 
   if (!lot) return <Empty title="No lots this week" />;

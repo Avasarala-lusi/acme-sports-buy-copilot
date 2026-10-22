@@ -1,182 +1,218 @@
-"""Manual planner decisions (the Tuesday Go/No-Go), saved and applied on top of the automatic plan.
+"""Persist decisions and replay subsequent demand and capacity; never mutate the reference.
 
-The spec requires the tool to distinguish automatically triggered rules from manually overridden
-decisions. The engine's plan is never changed; overrides are stored separately and applied to
-produce the "effective" plan that the app shows and exports.
-
-Supported overrides per buying run (draft runs are previews and cannot be decided):
-  - lot decision: Buy | No-Go | Delay. Lots default to the engine's decision: Buy, or Review when no
-    certified factory had capacity; a planner approves a review lot by choosing Buy.
-  - lot factory switch (must be certified); the target factory's load after the move is checked
-  - customer hold (removes that customer's units from every lot in the run)
+Hold and Delay apply to one buying window; No-Go cancels the selected PRs until
+reverted. Approving a lot never bypasses certification, quantity or capacity checks.
 """
+import hashlib
 import json
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-
 import pandas as pd
-
 from engine.config import ROOT, load_config
-from engine.planner import Planner
+from engine.planner import BOUGHT, PLANNER_REVIEW, Planner
+from engine.rules.quantities import mpq_for
+from engine.rules.timing import delivery_date
 
 DECISIONS = ["Buy", "No-Go", "Delay"]
 
 
-def ensure_decidable(planner: Planner, run_id: str) -> None:
-    r = planner.run_result(run_id)
-    if not r.is_buying_run:
-        raise ValueError(f"{run_id} is a draft of the {r.buy_date:%d %b %Y} buying window; "
-                         "decisions are made in the buying run")
+def ensure_decidable(planner, run_id):
+    if not planner.run_result(run_id).is_buying_run:
+        raise ValueError(f"{run_id} is a draft; decisions are made in the buying run")
 
 
 class OverrideStore:
-    def __init__(self, path: Path | str | None = None):
-        cfg = load_config()
-        self.path = Path(path or ROOT / cfg["data"]["output_dir"] / "overrides.json")
-        self.data: dict = json.loads(self.path.read_text()) if self.path.exists() else {}
+    def __init__(self, path=None):
+        self.path = Path(path or ROOT / load_config()["data"]["output_dir"] / "overrides.json")
+        self.data = json.loads(self.path.read_text()) if self.path.exists() else {}
 
-    def save(self) -> None:
+    def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.data, indent=2))
 
-    def run(self, run_id: str) -> dict:
-        return self.data.setdefault(run_id, {"lots": {}, "held_customers": []})
+    def run(self, run_id):
+        return self.data.setdefault(run_id, {"lots": {}, "held_customers": [], "pulls": []})
 
-    def set_lot(self, planner: Planner, run_id: str, lot_id: str, decision: str = "Buy",
-                factory: str | None = None, note: str = "") -> None:
+    def replay(self, planner):
+        base = getattr(planner, "automatic_reference", planner)
+        if not self.data:
+            return base
+        key = hashlib.sha256(json.dumps(self.data, sort_keys=True).encode()).hexdigest()
+        cached = getattr(base, "_decision_replay", None)
+        if cached and cached[0] == key:
+            return cached[1]
+        effective = Planner(data=base.data, config=deepcopy(base.cfg), decisions=deepcopy(self.data))
+        effective.automatic_reference = base
+        base._decision_replay = (key, effective)
+        return effective
+
+    def set_lot(self, planner, run_id, lot_id, decision="Buy", factory=None, note=""):
         ensure_decidable(planner, run_id)
         lots = planner.run_result(run_id).lots.set_index("lot_id")
         if lot_id not in lots.index:
-            raise KeyError(f"unknown lot {lot_id} in {run_id}")
-        if decision not in DECISIONS and decision != lots.loc[lot_id, "auto_decision"]:
+            raise KeyError(f"unknown lot {lot_id}")
+        if decision not in DECISIONS and decision != "Review":
             raise ValueError(f"decision must be one of {DECISIONS}")
-        article = lots.loc[lot_id, "article_id"]
-        if factory == lots.loc[lot_id, "assigned_factory"]:
-            factory = None
-        if factory and factory not in planner.certified[article]:
-            raise ValueError(f"{factory} is not certified for {article}")
-        if decision == lots.loc[lot_id, "auto_decision"] and not factory and not note:
+        lot = lots.loc[lot_id]
+        if factory and factory not in planner.certified[lot.article_id]:
+            raise ValueError(f"{factory} is not certified for {lot.article_id}")
+        if decision == lot.auto_decision and not factory and not note:
             self.run(run_id)["lots"].pop(lot_id, None)
         else:
-            self.run(run_id)["lots"][lot_id] = {"decision": decision, "factory": factory, "note": note,
-                                                "updated_at": datetime.now().isoformat(timespec="seconds")}
+            self.run(run_id)["lots"][lot_id] = {"decision": decision, "factory": factory,
+                "note": note, "pr_ids": lot.pr_ids.split(","),
+                "updated_at": datetime.now().isoformat(timespec="seconds")}
         self.save()
 
-    def revert_lot(self, run_id: str, lot_id: str) -> None:
+    def revert_lot(self, run_id, lot_id):
         self.run(run_id)["lots"].pop(lot_id, None)
         self.save()
 
-    def hold_customer(self, run_id: str, customer_id: str) -> None:
+    def hold_customer(self, run_id, customer_id):
         held = self.run(run_id)["held_customers"]
         if customer_id not in held:
             held.append(customer_id)
         self.save()
 
-    def release_customer(self, run_id: str, customer_id: str) -> None:
+    def release_customer(self, run_id, customer_id):
         held = self.run(run_id)["held_customers"]
         if customer_id in held:
             held.remove(customer_id)
         self.save()
 
-    def reset(self, run_id: str) -> None:
+    def reset(self, run_id):
         self.data.pop(run_id, None)
         self.save()
 
-    def count(self, run_id: str) -> int:
+    def accept_pull(self, planner, run_id, pr_ids, target_run_id):
+        from engine.pull_forward import recommendations
+        matches=[r for r in recommendations(planner,run_id).to_dict("records")
+                 if r["actionable"] and set(r["pr_ids"])==set(pr_ids) and r["target_run_id"]==target_run_id]
+        if len(matches)!=1:
+            raise ValueError("Pull-forward is not feasible in the current plan; refresh and review failed checks")
+        row=matches[0]
+        moves=self.run(target_run_id).setdefault("pulls",[])
+        if any(set(m["pr_ids"]) & set(pr_ids) for m in moves):
+            raise ValueError("These PRs already have an accepted pull-forward")
+        moves.append({"pr_ids":pr_ids,"factory":row["factory_id"],"source_run_id":row["source_run_id"]})
+        self.save()
+
+    def count(self, run_id):
         r = self.data.get(run_id, {})
-        return len(r.get("lots", {})) + len(r.get("held_customers", []))
+        return len(r.get("lots", {})) + len(r.get("held_customers", [])) + len(r.get("pulls", []))
 
 
-def effective_lots(planner: Planner, run_id: str, store: OverrideStore) -> pd.DataFrame:
-    """The run's lots with saved manual decisions applied. Untouched lots stay automatic."""
-    r = planner.run_result(run_id)
-    lots = r.lots.copy()
-    if lots.empty:
-        return lots.assign(decision=pd.Series(dtype=str), override_note=pd.Series(dtype=str))
-    lots["decision"] = lots["auto_decision"]
-    lots["override_note"] = ""
-    overrides = store.data.get(run_id, {})
-    held = set(overrides.get("held_customers", []))
-    lot_ov = overrides.get("lots", {})
-    if not held and not lot_ov:
-        return lots
-
-    moq = planner.cfg["quantities"]["moq_per_market"]
-    po = r.buy_date
-    threshold = planner.cfg["capacity"]["backup_threshold_pct"]
-    rows = []
-    for lot in lots.to_dict("records"):
-        ids = lot["pr_ids"].split(",")
-        notes, changed = [], False
-
+def apply_run_decisions(planner, run_id, rows, buy_date, decisions):
+    """Rebuild this run on prior commitments, with one shared ledger for all changes."""
+    ledger = planner.ledger.copy()
+    overrides = decisions.get("lots", {})
+    held = set(decisions.get("held_customers", []))
+    records, matched = [], set()
+    for original in sorted(rows, key=lambda r: planner.priority_key(r["pr_ids"].split(","))):
+        row = dict(original)
+        ids = row["pr_ids"].split(",")
+        found = [(k,v) for k,v in overrides.items() if k == row["lot_id"]
+                 or (v.get("pr_ids") and set(v["pr_ids"]) == set(ids))]
+        ov = found[0][1] if found else {}
+        matched.update(k for k,_ in found)
         keep = [p for p in ids if planner.rows[p]["customer_id"] not in held]
-        if len(keep) < len(ids):
-            removed = [p for p in ids if p not in keep]
-            held_here = sorted({planner.rows[p]["customer_id"] for p in removed})
-            notes.append(f"Customer hold ({', '.join(held_here)}): "
-                         f"{sum(planner.rows[p]['requested_qty'] for p in removed):,.0f} units removed")
-            changed = True
-
-        ov = lot_ov.get(lot["lot_id"], {})
-        factory = ov.get("factory") or lot["assigned_factory"]
-        if ov.get("factory"):
-            notes.append(f"Factory switched {lot['assigned_factory']} → {factory}")
-            changed = True
-        if ov.get("decision", lot["auto_decision"]) != lot["auto_decision"]:
-            lot["decision"] = ov["decision"]
-            changed = True
-            if lot["auto_decision"] == "Review" and ov["decision"] == "Buy":
-                notes.append("Approved by the planner although no certified factory had capacity")
-        if ov.get("note"):
-            notes.append(ov["note"])
-            changed = True
-
+        for p in set(ids)-set(keep):
+            planner.outcomes.pop(p,None)
+            planner.open[p]="Customer held for this buying window; reconsider next window"
+        row.update(decision=ov.get("decision",row["auto_decision"]), override_note=ov.get("note",""))
+        if ov or len(keep)!=len(ids):
+            row["decision_type"]="manual"
+        if len(keep)!=len(ids):
+            row["override_note"] += f" Customer hold removed {planner._qty(set(ids)-set(keep)):g} units."
         if not keep:
-            lot.update(decision="No-Go", consolidated_qty=0, n_prs=0, pr_ids="", total_cost_usd=0.0,
-                       nsv_usd=0.0, on_time_units=0.0)
-            notes.append("All units held")
-        elif changed:
-            qty = sum(planner.rows[p]["requested_qty"] for p in keep)
-            rdd = min(planner.rows[p]["rdd_original"] for p in keep)
-            m, t = planner.lot_lead_times(keep, factory)
-            release = rdd - pd.Timedelta(days=m + t)
-            start = max(release, po)
-            arrival = start + pd.Timedelta(days=m + t)
-            mult = float(planner.factories.loc[factory, "cost_multiplier"])
-            lot.update(
-                consolidated_qty=int(qty), n_prs=len(keep), pr_ids=",".join(keep), earliest_rdd=rdd,
-                assigned_factory=factory, cost_multiplier=mult,
-                total_cost_usd=qty * lot["unit_cost_usd"] * mult,
-                nsv_usd=float(sum(planner.rows[p]["nsv"] for p in keep)),
-                release_date=release, production_start=start, expected_arrival=arrival,
-                on_time=arrival <= rdd, suggested_rdd=rdd if arrival <= rdd else arrival,
-                on_time_units=float(sum(planner.rows[p]["requested_qty"] for p in keep
-                                        if planner.rows[p]["rdd_original"] >= arrival)),
-            )
-            extra = []
-            if qty < moq and lot["decision"] == "Buy":
-                extra.append(f"Below MOQ after override: {qty:,.0f} < {moq}")
-            if ov.get("factory"):
-                from sim.scenarios import move_load
-                load = move_load(planner, run_id, lot["lot_id"], factory)
-                lot.update(util_after_pct=round(load["target_after_pct"], 1))
-                if load["target_after_pct"] >= threshold:
-                    extra.append(f"Capacity after switch: {factory} at {load['target_after_pct']:.0f}% "
-                                 f"(threshold {threshold:.0f}%)")
-            lot["warnings"] = " | ".join(x for x in [lot["warnings"], *extra] if x)
+            row.update(decision="No-Go",consolidated_qty=0,pr_ids="",n_prs=0,
+                       total_cost_usd=0.,nsv_usd=0.,on_time_units=0.)
+            row["override_note"] += " All customer units held for this window."
+            records.append(row)
+            continue
+        qty = planner._qty(keep)
+        factory = ov.get("factory") or row["assigned_factory"]
+        m,t = planner.lot_lead_times(keep,factory)
+        arrival = delivery_date(buy_date,m,t)
+        rdd = planner._min_rdd(keep)
+        load = ledger.utilization_with(factory,buy_date,m,qty)
+        row.update(pr_ids=",".join(keep),n_prs=len(keep),consolidated_qty=qty,
+            assigned_factory=factory,mfg_days=m,trans_days=t,production_start=buy_date,
+            release_date=rdd-pd.Timedelta(days=m+t),earliest_rdd=rdd,suggested_rdd=arrival,
+            inventory_exposure_days=int((arrival-rdd).days),
+            lead_time_source="PR-provided" if all(planner.rows[p]["assigned_factory"]==factory for p in keep)
+                else "Factory-midpoint estimate (mixed with PR values if applicable)",
+            cost_multiplier=float(planner.factories.loc[factory,"cost_multiplier"]),
+            total_cost_usd=qty*row["unit_cost_usd"]*float(planner.factories.loc[factory,"cost_multiplier"]),
+            cost_delta_vs_primary_usd=qty*row["unit_cost_usd"]*(float(planner.factories.loc[factory,"cost_multiplier"])
+                -float(planner.factories.loc[row["primary_factory"],"cost_multiplier"])),
+            nsv_usd=sum(planner.rows[p]["nsv"] for p in keep),on_time=arrival<=rdd,
+            on_time_units=sum(planner.rows[p]["requested_qty"] for p in keep if arrival<=planner.rows[p]["rdd_original"]),
+            util_before_pct=round(ledger.utilization(factory,ledger.weeks_for(buy_date,m)),1),
+            util_after_pct=round(load,1),backup_routed=factory!=row["primary_factory"])
+        if row["decision"]=="Buy":
+            failures=[]
+            if factory not in planner.certified[row["article_id"]]: failures.append("uncertified factory")
+            if load>planner.cfg["capacity"]["hard_limit_pct"]+1e-9: failures.append("hard capacity ceiling")
+            if qty<planner.cfg["quantities"]["moq_per_market"] and not row["last_chance"]:
+                failures.append("market MOQ after hold")
+            if not planner.rdd_span_ok(keep): failures.append("15-day RDD span")
+            if failures:
+                row["decision"]="Review"
+                row["warnings"] += " | Not committed: "+", ".join(failures)
+            else:
+                ledger.add(factory,buy_date,m,qty)
+        records.append(row)
+    for band in planner.mpq_groups([r for r in records if r["decision"]=="Buy"]):
+        minimum=mpq_for(band[0]["category"],planner.cfg["quantities"]["mpq"])
+        if sum(r["consolidated_qty"] for r in band)<minimum and not any(r["last_chance"] for r in band):
+            for row in band:
+                ledger.remove(row["assigned_factory"],buy_date,row["mfg_days"],row["consolidated_qty"])
+                row["decision"]="Review"
+                row["warnings"] += " | MPQ not met after planner changes; not committed"
+    for row in records:
+        row["capacity_status"] = ("Needs planner review" if row["decision"]=="Review" else
+            "Above threshold, within capacity" if row["util_after_pct"]>=planner.cfg["capacity"]["backup_threshold_pct"]
+            else "Within capacity")
+        for p in filter(None,row["pr_ids"].split(",")):
+            planner.outcomes.pop(p,None)
+            if row["decision"]=="Buy":
+                planner._decide([p],run_id,BOUGHT,"Planner-effective purchase",row["lot_id"])
+            elif row["decision"]=="No-Go":
+                planner._decide([p],run_id,"CANCELLED","Planner No-Go",row["lot_id"])
+            elif row["decision"]=="Delay":
+                planner.open[p]="Planner delayed to next buying window"
+            else:
+                planner._decide([p],run_id,PLANNER_REVIEW,row["warnings"],row["lot_id"])
+    unmatched=overrides.keys()-matched
+    for key in unmatched:
+        planner.decision_issues.append(f"{run_id}/{key}: saved lot grouping changed; review/reapply decision")
+    if unmatched:
+        # Cannot safely associate an old decision with a new grouping. Fail closed
+        # for this window rather than buying something the planner may have cancelled.
+        ledger=planner.ledger.copy()
+        for row in records:
+            if row["decision"]=="Buy":
+                row["decision"]="Review"
+                row["capacity_status"]="Needs planner review"
+                row["warnings"] += " | Unmatched saved decision: reapply before committing this window"
+                planner._decide(row["pr_ids"].split(","),run_id,PLANNER_REVIEW,row["warnings"],row["lot_id"])
+    return records,ledger
 
-        if changed or not keep:
-            lot["decision_type"] = "manual"
-            lot["override_note"] = "; ".join(notes)
-        rows.append(lot)
-    return pd.DataFrame(rows)
+
+def effective_lots(planner,run_id,store):
+    lots=store.replay(planner).run_result(run_id).lots.copy()
+    if "decision" not in lots:
+        lots["decision"]=lots.get("auto_decision",pd.Series(dtype=str))
+    if "override_note" not in lots: lots["override_note"]=""
+    return lots
 
 
-def effective_fact_table(planner: Planner, run_id: str, store: OverrideStore) -> pd.DataFrame:
-    """fact_buy_plan_suggestions for one run, after manual decisions (Buy lots only)."""
+def effective_fact_table(planner,run_id,store):
     from engine.output import SPEC_COLUMNS
-    lots = effective_lots(planner, run_id, store)
-    lots = lots[(lots["decision"] == "Buy") & (lots["consolidated_qty"] > 0)].copy()
-    lots["suggestion_id"] = "SUG-" + lots["lot_id"]
-    lots["suggested_rdd"] = pd.to_datetime(lots["suggested_rdd"]).dt.date
-    return lots[SPEC_COLUMNS].reset_index(drop=True)
+    lots=effective_lots(planner,run_id,store)
+    out=lots[(lots["decision"]=="Buy") & (lots["consolidated_qty"]>0)].copy()
+    out["suggestion_id"]="SUG-"+out["lot_id"]
+    out["suggested_rdd"]=pd.to_datetime(out["suggested_rdd"]).dt.date
+    return out[SPEC_COLUMNS].reset_index(drop=True)

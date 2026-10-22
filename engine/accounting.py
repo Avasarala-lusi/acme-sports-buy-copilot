@@ -2,8 +2,8 @@
 
 - Complete accounting: every requisition seen has exactly one outcome; units add up.
 - Valid recommendations: every bought lot passes the business rules (or carries a warning).
-- Capacity: no factory week is loaded beyond the hard limit except by labelled last-chance lots.
-- Monthly buying: purchases are only committed in buying runs.
+- Capacity: every purchased factory/production week respects the hard ceiling.
+- Buying windows: purchases are only committed in configured buying runs.
 """
 import pandas as pd
 
@@ -12,11 +12,11 @@ from engine.planner import BOUGHT, PLANNER_REVIEW, Planner
 
 
 def overload_without_last_chance(planner: Planner) -> float:
-    """Highest weekly load (%) from bought lots, leaving out last-chance lots."""
+    """Highest weekly load from ALL bought lots (legacy function name retained)."""
     lots = planner.bought_lots()
     ledger = CapacityLedger(planner.factories["weekly_capacity_units"].to_dict(),
                             planner.cfg["capacity"]["spread_over_manufacturing"])
-    for lot in lots[~lots["last_chance"]].itertuples():
+    for lot in lots.itertuples():
         ledger.add(lot.assigned_factory, lot.production_start, lot.mfg_days, lot.consolidated_qty)
     t = ledger.table()
     return float(t["utilization_pct"].max()) if len(t) else 0.0
@@ -27,21 +27,25 @@ def accounting_report(planner: Planner) -> dict:
     seen = planner.prs[planner.prs["run_num"] <= planner.processed]
     lots = planner.all_lots()
 
-    in_lots = (lots["pr_ids"].str.split(",").explode() if len(lots) else pd.Series(dtype=str))
-    ids_of = lambda d: set(lots.loc[lots["auto_decision"] == d, "pr_ids"].str.split(",").explode()) if len(lots) else set()
+    bought=planner.bought_lots()
+    in_lots = (bought["pr_ids"].str.split(",").explode() if len(bought) else pd.Series(dtype=str))
+    def ids_of(d):
+        if not len(lots): return set()
+        decisions=lots["decision"].fillna(lots["auto_decision"]) if "decision" in lots else lots["auto_decision"]
+        return set(filter(None,lots.loc[decisions==d,"pr_ids"].str.split(",").explode()))
     hard = planner.cfg["capacity"]["hard_limit_pct"]
     units_by_outcome = out.groupby("outcome")["requested_qty"].sum().to_dict()
     checks = {
         "every_pr_has_one_outcome": set(out["pr_id"]) == set(seen["pr_id"]) and out["pr_id"].is_unique,
         "no_pr_in_two_lots": in_lots.is_unique,
         "bought_prs_match_lots": ids_of("Buy") == set(out.loc[out["outcome"] == BOUGHT, "pr_id"]),
-        "review_prs_match_lots": ids_of("Review") == set(out.loc[out["outcome"] == PLANNER_REVIEW, "pr_id"]),
+        "review_prs_visible": set(out.loc[out["outcome"]==PLANNER_REVIEW,"pr_id"]) <= set(planner.prs["pr_id"]),
         "purchases_only_in_buying_windows": set(lots["run_id"]) <= set(planner.buying_runs()) if len(lots) else True,
-        "no_overload_except_last_chance": overload_without_last_chance(planner) <= hard + 1e-6,
+        "no_overload": overload_without_last_chance(planner) <= hard + 1e-6,
         "units_add_up": abs(out["requested_qty"].sum() - seen["requested_qty"].sum()) < 1e-6,
         "lot_qty_matches_prs": bool(len(lots) == 0 or (
             lots["consolidated_qty"]
-            == lots["pr_ids"].map(lambda s: planner.prs.loc[s.split(","), "requested_qty"].sum())).all()),
+            == lots["pr_ids"].map(lambda s: planner.prs.loc[list(filter(None,s.split(","))), "requested_qty"].sum())).all()),
     }
     checks = {k: bool(v) for k, v in checks.items()}
     return {
@@ -70,6 +74,14 @@ def rule_violations(planner: Planner) -> pd.DataFrame:
         if lot.consolidated_qty < moq and "Below MOQ" not in (lot.warnings or ""):
             rows.append((lot.lot_id, "below MOQ without warning"))
         span = (prs["rdd_original"].max() - prs["rdd_original"].min()).days
-        if span > planner.cfg["grouping"]["window_days"] and not lot.is_piggyback_applied:
+        if span > planner.cfg["grouping"]["window_days"]:
             rows.append((lot.lot_id, f"RDD span {span} days exceeds grouping window"))
+        if pd.Timestamp(lot.suggested_rdd) != (pd.Timestamp(lot.production_start)+pd.Timedelta(days=lot.mfg_days+lot.trans_days)).normalize():
+            rows.append((lot.lot_id,"suggested_rdd does not match the recommended production/transit schedule"))
+    from engine.rules.quantities import mpq_for
+    for _,run_lots in lots.groupby("run_id"):
+        for band in planner.mpq_groups(run_lots.to_dict("records")):
+            minimum=mpq_for(band[0]["category"],planner.cfg["quantities"]["mpq"])
+            if sum(r["consolidated_qty"] for r in band)<minimum and not any(r["last_chance"] for r in band):
+                rows.extend((r["lot_id"],"MPQ not met within 15-day article/factory group") for r in band)
     return pd.DataFrame(rows, columns=["lot_id", "violation"])

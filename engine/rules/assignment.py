@@ -4,7 +4,7 @@ Loads are projected: each factory's utilisation over the lot's production weeks 
 A lot stays on its primary while the projected load is below the threshold, otherwise it goes to a
 certified backup below the threshold. If neither is below the threshold, the less-loaded option is used
 only while it stays within the hard limit; beyond that the lot is either sent for planner review or,
-for last-chance articles (client: warn, don't block), bought with an over-capacity warning.
+for every article including last-chance, retained for planner review. No policy waives the hard ceiling.
 """
 from dataclasses import dataclass, field
 
@@ -90,16 +90,8 @@ def choose_from_chain(primary: str, chain: list[str], certified: set[str], loads
         a.status = ABOVE_THRESHOLD
         a.warnings.append(f"Capacity: no certified option below {threshold_pct:.0f}% with this lot ({text}); "
                           f"assigned to {target}, within capacity")
-    elif last_chance:
-        a.status = OVER_LAST_CHANCE
-        a.warnings.append(f"Over capacity: {target} reaches {load:.1f}% with this lot ({text}); bought because "
-                          "the article is in its last chance (client: warn, don't block). Extra capacity must be agreed")
-    elif no_capacity_policy == "planner_review":
+    else:
         a.status = REVIEW
         a.warnings.append(f"Needs planner review: no certified factory has room ({text} with this lot, "
                           f"limit {hard_limit_pct:.0f}%); not bought automatically")
-    else:
-        a.status = OVER_CAPACITY
-        a.warnings.append(f"Over capacity: {target} reaches {load:.1f}% with this lot ({text}); "
-                          "planner review needed")
     return a

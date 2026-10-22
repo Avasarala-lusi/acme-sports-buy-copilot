@@ -23,7 +23,7 @@ def as_is_plan(planner: Planner, run_ids: list[str] | None = None) -> pd.DataFra
     out = prs[["pr_id", "run_id", "article_id", "market_destination", "requested_qty",
                "rdd_original", "assigned_factory", "backup_triggered", "unit_cost_usd"]].copy()
     out["cost_usd"] = out["requested_qty"] * out["unit_cost_usd"] * out["assigned_factory"].map(mult)
-    out["expected_arrival"] = arrival
+    out["suggested_rdd"] = arrival
     out["on_time"] = arrival <= out["rdd_original"]
     return out.reset_index(drop=True)
 

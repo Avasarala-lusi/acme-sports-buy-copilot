@@ -12,7 +12,7 @@ from engine.rules.assignment import ABOVE_THRESHOLD, OK as FITS, OVER_CAPACITY, 
 from engine.rules.grouping import group_by_rdd
 from engine.rules.quantities import OK, PIGGYBACK, SHORT, pick_to_fill, quantity_status
 
-CAL = BuyingCalendar(week_of_month=3, po_weekday=2)  # third-week Wednesday
+CAL = BuyingCalendar(week_of_month=3, po_weekday=2, frequency="monthly")  # legacy configurable calendar
 
 
 # ---- buying windows (client: monthly, third week)
@@ -111,14 +111,14 @@ def test_both_above_threshold_but_within_limit_is_bought_with_warning():
     assert a.factory == "B" and a.status == ABOVE_THRESHOLD and a.warnings
 
 
-def test_no_room_last_chance_is_bought_over_capacity_with_warning():
+def test_no_room_last_chance_requires_review():
     a = choose_factory("P", "B", {"P", "B"}, 130, 120, 85, last_chance=True)
-    assert a.factory == "B" and a.status == OVER_LAST_CHANCE and "Over capacity" in a.warnings[0]
+    assert a.factory == "B" and a.status == REVIEW and "planner review" in a.warnings[0].lower()
 
 
 def test_no_room_policy_buy_with_warning():
     a = choose_factory("P", "B", {"P", "B"}, 130, 120, 85, no_capacity_policy="buy_with_warning")
-    assert a.status == OVER_CAPACITY
+    assert a.status == REVIEW  # legacy warning policy may not waive the hard ceiling
 
 
 def test_uncertified_backup_is_never_used():

@@ -69,7 +69,7 @@ export function Layout() {
   const { data: plan } = useQuery({ queryKey: ["plan", runId], queryFn: () => api.plan(runId) });
   const revert = useMutation({
     mutationFn: () => api.revertWeek(runId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["plan", runId] }),
+    onSuccess: () => qc.invalidateQueries(),
   });
 
   useEffect(() => {

@@ -209,6 +209,7 @@ export function BuyPlan() {
       )}
 
       <KpiGrid p={p} trend={trend.data ?? []} />
+      {p.decision_issues?.map((issue) => <p key={issue} className="mb-3 rounded border border-warn/30 bg-warn-soft p-3 text-sm text-warn">{issue}</p>)}
       <DemandFlow p={p} />
 
       <Tabs value={view} onChange={setView} tabs={[
@@ -224,8 +225,8 @@ export function BuyPlan() {
           {view === "review" && (
             <div className="mb-3 flex items-start gap-2 rounded-2xl border border-warn/25 bg-warn-soft p-3 text-sm text-warn">
               <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-              No certified factory had room for these lots in their production weeks, even with the backup. They are not bought
-              automatically: a planner can approve one (Buy), switch its factory, or reject it (No-Go).
+              These lots fail a capacity or quantity check. Review the specific warning, try another certified factory,
+              delay, or cancel. Choosing Buy still rechecks all constraints and never bypasses the hard capacity ceiling.
             </div>
           )}
           <div className="mb-3 flex flex-wrap items-center gap-2">

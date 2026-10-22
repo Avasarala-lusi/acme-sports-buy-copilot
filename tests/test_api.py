@@ -4,7 +4,7 @@ import pytest
 from tests.conftest import needs_data
 
 pytestmark = needs_data
-RUN = "MRP-WK020"
+RUN = "MRP-WK019"
 
 
 @pytest.fixture(scope="module")
@@ -22,7 +22,7 @@ def client(tmp_path_factory):
 def test_reference_endpoints(client):
     assert client.get("/health").json()["runs"] == 100
     runs = client.get("/runs").json()
-    assert len(runs) == 100 and sum(r["is_buying_run"] for r in runs) == 23
+    assert len(runs) == 100 and sum(r["is_buying_run"] for r in runs) == 46
     assert len(client.get("/factories").json()) == 6
     settings = client.get("/settings").json()
     assert settings["thresholds"]["moq_per_market"] == 300 and settings["items"]
@@ -43,7 +43,7 @@ def test_plan_shape(client):
 def test_draft_week(client):
     plan = client.get("/plan/MRP-WK021").json()
     assert not plan["is_buying_run"] and plan["plan_status"] == "Draft"
-    assert plan["buying_run_id"] == "MRP-WK025" and plan["lots"]
+    assert plan["buying_run_id"] == "MRP-WK022" and plan["lots"]
     r = client.put(f"/overrides/MRP-WK021/lots/{plan['lots'][0]['lot_id']}", json={"decision": "No-Go", "factory": None, "note": ""})
     assert r.status_code == 400 and "draft" in r.json()["detail"]
     assert client.post("/overrides/MRP-WK021/holds", json={"customer_id": "DTC"}).status_code == 400
@@ -89,7 +89,7 @@ def test_unknown_run_is_404(client):
 
 def test_trend_and_units(client):
     trend = client.get("/trend").json()
-    assert len(trend) == 23 and any(t["run_id"] == RUN for t in trend)
+    assert len(trend) == 46 and any(t["run_id"] == RUN for t in trend)
     plan = client.get(f"/plan/{RUN}").json()
     point = next(t for t in trend if t["run_id"] == RUN)
     assert point["lots"] == plan["kpis_automatic"]["lots"]

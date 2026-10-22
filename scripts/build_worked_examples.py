@@ -21,7 +21,7 @@ from engine.output import get_planner  # noqa: E402
 from engine.planner import FUTURE_FORECAST, PLANNER_REVIEW  # noqa: E402
 from sim import scenarios  # noqa: E402
 
-RUN = sys.argv[1] if len(sys.argv) > 1 else "MRP-WK020"
+RUN = sys.argv[1] if len(sys.argv) > 1 else "MRP-WK019"
 p = get_planner()
 cfg = p.cfg
 res = p.run_result(RUN)
@@ -58,9 +58,9 @@ release = pr["rdd_original"] - pd.Timedelta(days=m + t)
 nxt = res.next_buy_date
 assert release == pr["release_primary"] and release < nxt
 drafts = [r for r in p.runs["run_id"] if p.results[r].buy_date == res.buy_date and r != RUN]
-section("0. Monthly buying window")
-out += [f"The buying window is the PO day of the third week of each month (days 15-21). {RUN}'s PO date, "
-        f"{d(res.buy_date)}, is in the third week, so {RUN} is a **buying run**: its purchases are committed.", "",
+section("0. Configured MID/EOM buying window")
+out += [f"The provisional MID/EOM calendar maps {RUN} to PO date {d(res.buy_date)}. "
+        "This is a buying run; exact cutoff-to-PO mapping remains an assumption.", "",
         f"The weekly runs before it ({', '.join(drafts) or 'none'}) showed **drafts** of this window: what it would buy "
         "with the demand known that week. Drafts change nothing; the next window is "
         f"{window_label(nxt)} ({d(nxt)})."]
@@ -91,8 +91,9 @@ qty = sum(p.rows[x]["requested_qty"] for x in ids)
 assert qty == routed["consolidated_qty"] and qty >= moq
 cat = routed["category"]
 mpq = cfg["quantities"]["mpq"][cat]
-same = lots[(lots["article_id"] == routed["article_id"]) & (lots["assigned_factory"] == routed["assigned_factory"])]
-fac_total = int(same["consolidated_qty"].sum())
+band=next(b for b in p.mpq_groups(lots.reset_index().to_dict("records"))
+          if any(row["lot_id"]==routed.name for row in b))
+fac_total = int(sum(row["consolidated_qty"] for row in band))
 assert fac_total >= mpq or routed["last_chance"]
 reach = re.search(r"would reach (\d+)%", routed["reason"])
 backup_at = re.search(r"routed to backup \S+ at (\d+)%", routed["reason"])
@@ -144,7 +145,8 @@ if len(fo):
             "| Result | Moved to **Future** (not bought) |"]
 
 # ---------------------------------------------------------------- planner review
-rev = all_run_lots[all_run_lots["auto_decision"] == "Review"]
+rev = all_run_lots[(all_run_lots["auto_decision"] == "Review") &
+                   (all_run_lots["util_after_pct"] > cfg["capacity"]["hard_limit_pct"])]
 if len(rev):
     rv = rev.iloc[0]
     rv_out = p.run_result(RUN).outcomes.set_index("pr_id").loc[rv["pr_ids"].split(","), "outcome"]
@@ -199,7 +201,7 @@ section(f"8. What-if: switch lot {lot.name} from {lot['assigned_factory']} to {t
 out += ["| Step | Value |", "|---|---|",
         f"| Certified for {lot['article_id']}? | Yes ({', '.join(sorted(p.certified[lot['article_id']]))}) |",
         f"| Cost change | {lot['consolidated_qty']:,} × {money(lot['unit_cost_usd'])} × ({sw['cost_multiplier_after']} − {sw['cost_multiplier_before']}) = **{money(sw['cost_delta_usd'])}** |",
-        f"| Lead-time change | {sw['lead_time_delta_days']:+d} days |",
+        f"| Lead-time change | {sw['lead_time_delta_days']:+g} days |",
         f"| New arrival | {d(sw['arrival_after'])} vs RDD {d(lot['earliest_rdd'])} → {'on time' if sw['on_time_after'] else 'late'} |",
         f"| MOQ still met | {'Yes' if sw['moq_still_met'] else 'No'} ({lot['consolidated_qty']:,} units, unchanged) |",
         f"| {lot['assigned_factory']} load (lot removed) | {sw['source_load_before_pct']:.1f}% → {sw['source_load_after_pct']:.1f}% |",
@@ -232,7 +234,7 @@ if len(rec):
 rep = accounting_report(p)
 units = rep["units_by_outcome"]
 assert abs(sum(units.values()) - rep["units_seen"]) < 1e-6
-section("9. Complete accounting (all 100 runs, 23 buying windows)")
+section(f"9. Complete accounting (all runs, {len(p.buying_runs())} buying windows)")
 out += ["| Outcome | Units |", "|---|---|"] + [f"| {k} | {v:,.0f} |" for k, v in units.items()]
 out += [f"| **Total** | **{sum(units.values()):,.0f}** = all {rep['prs_seen']:,} requisitions ({rep['units_seen']:,.0f} units) |"]
 

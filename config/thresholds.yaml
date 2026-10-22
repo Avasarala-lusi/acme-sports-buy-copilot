@@ -10,21 +10,31 @@ data:
                                  # client decision to treat DTC as one customer was for anonymous DTC ids
 
 buying_window:
-  frequency: monthly             # [client] one buying window per month, in the third week
+  frequency: semi_monthly        # latest MID/EOM interpretation; replaces earlier monthly default
+  mid_cutoff_day: 15             # assumption: latest Wednesday on/before this cutoff
+  max_pull_forward_windows: 4    # count windows, not a fixed 56 days
   week_of_month: 3               # [assumption] third week = days 15-21; the buying run is the run whose PO date falls there
   po_weekday: 2                  # PO execution weekday in the data (0 = Monday, 2 = Wednesday)
   weekly_drafts: true            # [assumption] runs outside the buying window show a draft of it; nothing is committed
   lookahead_windows: 4           # spec 3.3: project load over the next 4 windows
 
+priority:
+  tie_break: revenue_then_rdd    # assumption: confirmed first, NSV descending, then RDD
+
+date_policy:
+  manufacturing_duration: calendar_days
+  interval: start_inclusive_completion_exclusive
+  holidays: none
+
 capacity:
   backup_threshold_pct: 85       # spec 3.2: route to backup when the factory is >= 85% consumed
   source: rolling_ledger         # [client] recompute from our own assignments, not fact_factory_utilization
-  spread_over_manufacturing: true  # [assumption] a lot's units are spread evenly over its manufacturing weeks
-  hard_limit_pct: 100            # [assumption] a factory week can never be loaded beyond this (confirm: overtime?)
-  when_no_capacity: planner_review  # [assumption] planner_review | buy_with_warning; when no certified option has room
+  spread_over_manufacturing: true  # [client] business-day-proportional capacity in the production interval
+  hard_limit_pct: 100            # [client] no automatic or manual purchase may assume overtime
+  when_no_capacity: planner_review  # [client] keep demand visible and show failed checks
 
 lead_times:
-  other_factory: midpoint        # [assumption] lead time at a factory other than the PR's own = midpoint of the factory's min/max
+  other_factory: midpoint        # [client] arithmetic midpoint; estimated source shown
 
 quantities:
   moq_per_market: 300            # spec rule 3
@@ -34,7 +44,7 @@ quantities:
 
 grouping:
   window_days: 15                # spec rule 2
-  mode: anchor                   # anchor | chain  (open question, see Trello Blockers)
+  mode: anchor                   # strict earliest-to-latest 15-day span; no chaining
 
 piggyback:
   tolerance_pct: 5               # spec rule 4: auto-trigger within 5% of the threshold
@@ -43,9 +53,9 @@ carry_forward:
   wait_if_not_late: true         # [assumption] a lot below MOQ/MPQ waits for the next run if it can still start on time
 
 last_chance:
-  include_forecast_only: true    # [assumption] catalogue is closing, so buy all outstanding demand
+  include_forecast_only: false   # conflicting last-chance/unconfirmed demand requires planner review
   on_quantity_shortfall: warn    # [client] warn, don't block
-  on_capacity_conflict: warn     # [client] warn, don't block
+  on_capacity_conflict: planner_review  # priority never waives the 100% hard ceiling
 
-backup_source: factory_chain     # [assumption] factory_chain | factory | article. Data v5: every supplied backup
+backup_source: factory_chain     # [client] matrix certification gates each factory-chain step
                                  # assignment walks the factory chain (backup, its backup, ... to CN04, the last resort)

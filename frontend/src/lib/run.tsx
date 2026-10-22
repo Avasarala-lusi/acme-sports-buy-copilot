@@ -20,9 +20,9 @@ export function RunProvider({ children }: { children: ReactNode }) {
   const { data: runs = [] } = useQuery({ queryKey: ["runs"], queryFn: api.runs, staleTime: Infinity });
   const [runId, setRunId] = useState<string>(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) ?? "MRP-WK020";
+      return localStorage.getItem(STORAGE_KEY) ?? "MRP-WK019";
     } catch {
-      return "MRP-WK020";
+      return "MRP-WK019";
     }
   });
 
