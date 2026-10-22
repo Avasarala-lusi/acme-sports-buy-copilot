@@ -27,7 +27,7 @@ def test_reference_endpoints(client):
     settings = client.get("/settings").json()
     assert settings["thresholds"]["moq_per_market"] == 300 and settings["items"]
     assert any("backup" in i for i in client.get("/data-issues").json())
-    assert not any(client.get("/features").json().values())
+    assert client.get("/features").json()["forecast"] is True
 
 
 def test_plan_shape(client):
@@ -102,3 +102,13 @@ def test_network_routes_add_up(client):
     assert len(net["factories"]) == 6 and net["routes"]
     assert abs(sum(r["bought_units"] for r in net["routes"]) - plan["kpis"]["units_bought"]) < 1e-6
     assert abs(sum(r["review_units"] for r in net["routes"]) - plan["kpis"]["review_units"]) < 1e-6
+
+
+def test_checks_include_baseline_evaluation(client):
+    baseline = client.get("/checks").json()["baseline"]
+    assert any(r["metric"].startswith("Backup-triggered") for r in baseline)
+
+
+def test_forecast_endpoint(client):
+    f = client.get(f"/forecast/{RUN}").json()
+    assert f["intake"] and f["load"] and f["windows"] and f["origin_week"] == int(RUN[-3:])

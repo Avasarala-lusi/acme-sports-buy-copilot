@@ -9,13 +9,14 @@ supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client
   Capacity is checked with each new lot included, and lots that fit no certified factory go to planner review.
   Under the provisional calendar there are 46 buying runs in the 100 MRP runs.
   Exact cutoff-to-PO dates remain configurable assumptions, not a newly confirmed client calendar.
-- **Web app** (`frontend/`): buy plan with rule explanations and Go/No-Go decisions, what-if scenarios, pull-forward, capacity, factory network map, export and data checks.
+- **Web app** (`frontend/`): buy plan with rule explanations and Go/No-Go decisions, what-if scenarios, pull-forward, capacity, demand and load forecast, factory network map, export and data checks.
 - **What-if scenarios:** hold a customer, check minimums, delay production, switch factories.
 - **Go/No-Go decisions:** saved changes replay later demand and capacity. Hold/Delay applies to one window;
   No-Go cancels selected PRs. Approvals and last-chance status never bypass the 100% ceiling.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows; moves are tested together on one ledger with MOQ and MPQ checks.
+- **Demand and load forecast:** demand that has not arrived yet, 17 weeks ahead with a P10-P90 range, turned into factory load with early warnings; the model is chosen by a walk-forward backtest.
 - **Trend notebook** (`notebooks/trend_analysis.ipynb`): the five required analyses over 100 weeks: seasonal demand, factory utilisation and backup triggers, pull-forward opportunities, forecast vs confirmed-order coverage, and sales value by market and credit rating.
-- **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan.
+- **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan and evaluation against the client's baseline.
 - **Documentation:** `docs/technical_documentation.md`; hand-checkable calculations in `docs/worked_examples.md`;
   planning terms in `docs/glossary.md`; capacity review checklist in `docs/capacity_validation_checklist.md`.
 
@@ -24,7 +25,7 @@ supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client
 Current rule details and provisional defaults: `docs/client_rule_updates.md`. Old worked examples and
 numeric comparisons must be regenerated before reuse. `suggested_rdd` is the single proposed arrival date.
 
-Data health checks, load forecast, on-time probability, network optimiser with a cost-vs-service slider, planner
+Data health checks, on-time probability, network optimiser with a cost-vs-service slider, planner
 benchmark and disruption drill; stretch: learned thresholds and plain-English questions.
 
 ## Run it

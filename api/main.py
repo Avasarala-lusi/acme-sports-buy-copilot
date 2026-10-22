@@ -5,6 +5,7 @@ If frontend/dist exists (npm run build), the web app is also served at /ui.
 """
 import io
 import json
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,10 +16,10 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from engine import pull_forward
+from engine import forecast, pull_forward
 from engine.calendar import window_label
 from engine.accounting import accounting_report, rule_violations
-from engine.metrics import comparison_table
+from engine.metrics import baseline_evaluation, comparison_table
 from engine.output import fact_buy_plan_suggestions, get_planner
 from engine.overrides import OverrideStore, effective_fact_table, effective_lots, ensure_decidable
 from engine.planner import FUTURE_FORECAST, OPEN, PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ
@@ -31,9 +32,18 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
                    allow_methods=["*"], allow_headers=["*"])
 
 
+_planner_lock = threading.Lock()
+
+
 @lru_cache
-def automatic_planner():
+def _automatic_planner():
     return get_planner()
+
+
+def automatic_planner():
+    """The planned engine, built once even when the first requests arrive together."""
+    with _planner_lock:
+        return _automatic_planner()
 
 
 def planner():
@@ -129,7 +139,7 @@ def data_issues():
 
 @app.get("/features")
 def features():
-    return {"forecast": False, "risk": False, "optimizer": False, "drill": False,
+    return {"forecast": True, "risk": False, "optimizer": False, "drill": False,
             "benchmark": False, "ask": False, "data_health": False}
 
 
@@ -139,6 +149,7 @@ def _checks():
     rep = accounting_report(p)
     rep["rule_violations"] = len(rule_violations(p))
     rep["comparison"] = _records(comparison_table(p))
+    rep["baseline"] = _records(baseline_evaluation(p))
     return _json(rep)
 
 
@@ -394,6 +405,41 @@ def network(run_id: str):
 
 
 # ------------------------------------------------------------------ export
+@lru_cache(maxsize=64)
+def _forecast(run_id: str):
+    p = automatic_planner()  # the forecast reads demand and committed load; decisions do not change demand
+    intake = forecast.forecast_intake(p, run_id)
+    weekly, windows = forecast.forecast_load(p, run_id, intake)
+    series = forecast.intake_series(p)
+    origin = int(p.runs.set_index("run_id").loc[run_id, "week_number"])
+    history = series[series["week"] <= origin][["factory", "week", "date", "units"]]
+    return {"run_id": run_id, "origin_week": origin, "model": str(intake["model"].iloc[0]),
+            "horizon_weeks": forecast.horizon_weeks(p),
+            "stage_coverage_pct": float(intake["has_stage"].mean() * 100),
+            "history": _records(history), "intake": _records(intake),
+            "load": _records(weekly), "windows": _records(windows)}
+
+
+@app.get("/forecast/{run_id}")
+def forecast_view(run_id: str):
+    _check_run(run_id)
+    return _forecast(run_id)
+
+
+_backtest_lock = threading.Lock()
+
+
+@lru_cache
+def _backtest_cached():
+    return _json(forecast.cached_backtest(automatic_planner()))
+
+
+@app.get("/forecast-backtest")
+def forecast_backtest():
+    with _backtest_lock:  # about a minute the first time; never run it twice in parallel
+        return _backtest_cached()
+
+
 @app.get("/export/{run_id}")
 def export(run_id: str, format: str = Query("csv", pattern="^(csv|xlsx)$")):
     _check_run(run_id)

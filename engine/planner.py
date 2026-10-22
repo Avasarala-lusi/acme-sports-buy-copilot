@@ -485,13 +485,31 @@ class Planner:
                     a.status=REVIEW
                     a.warnings.append("Accepted pull-forward no longer fits below 85%; planner review")
             o = options[a.factory]
+            alternatives = self._alternatives(lot, ledger, po_date, qty) if a.status == REVIEW else []
             if a.status != REVIEW:
                 ledger.add(a.factory, o["start"], o["mfg"], qty)
-            placed[id(lot)] = {"factory": a.factory, "backup": a.routed_to_backup, "mfg": o["mfg"],
+            placed[id(lot)] = {"alternatives": alternatives, "factory": a.factory, "backup": a.routed_to_backup, "mfg": o["mfg"],
                                "trans": o["trans"], "release": o["release"], "start": o["start"], "rdd": rdd,
                                "qty": qty, "status": a.status, "util_before": o["before"], "util_after": o["after"],
                                "reasons": a.reasons, "warnings": a.warnings, "primary": primary}
         return ledger, placed
+
+    def _alternatives(self, lot: Lot, ledger, po_date, qty: float) -> list[str]:
+        """Options for a lot no chain factory had room for: every certified factory with its load (this lot
+        added), arrival and cost, feasible ones first. The planner chooses; nothing here is bought."""
+        hard = self.cfg["capacity"]["hard_limit_pct"]
+        rdd = self._min_rdd(lot.pr_ids)
+        unit_cost = self.rows[lot.pr_ids[0]]["unit_cost_usd"]
+        start = pd.Timestamp(po_date)
+        out = []
+        for f in sorted(self.certified[lot.article_id]):
+            m, t = self.lot_lead_times(lot.pr_ids, f)
+            load = ledger.utilization_with(f, start, m, qty)
+            arrival = timing.delivery_date(start, m, t)
+            cost = qty * unit_cost * float(self.factories.loc[f, "cost_multiplier"])
+            out.append((load > hard, load, f"{f}: {load:.0f}% with this lot ({'fits' if load <= hard else 'over limit'}), "
+                        f"arrives {arrival:%Y-%m-%d}{' on time' if arrival <= rdd else ' late'}, ${cost:,.0f}"))
+        return [text for _, _, text in sorted(out)]
 
     def _check_mpq(self, placed, lots, candidates, used_future, run_id, next_buy, tol):
         """MPQ per article per factory for the window. Lots sent to planner review are not produced
@@ -605,6 +623,7 @@ class Planner:
             "is_piggyback_applied": bool(lot.piggyback_sources),
             "piggyback_source_window": ",".join(lot.piggyback_sources) or None,
             "last_chance": lot.last_chance, "decision_type": lot.decision_type,
+            "alternatives": " | ".join(a.get("alternatives", [])),
             "reason": " | ".join(reasons), "warnings": " | ".join(warnings),
         }
 

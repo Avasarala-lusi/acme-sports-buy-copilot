@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, CalendarClock, Globe2, ChevronLeft, ChevronRight, ClipboardCheck, Download, FlaskConical, Layers, ListChecks,
+  BarChart3, TrendingUp, CalendarClock, Globe2, ChevronLeft, ChevronRight, ClipboardCheck, Download, FlaskConical, Layers, ListChecks,
   Monitor, Moon, RotateCcw, Search, ShoppingCart, Sparkles, Sun,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -17,6 +17,7 @@ const nav = [
   { to: "/what-if", label: "Test a change", icon: FlaskConical },
   { to: "/pull-forward", label: "Pull-forward", icon: Layers },
   { to: "/capacity", label: "Capacity", icon: BarChart3 },
+  { to: "/forecast", label: "Forecast", icon: TrendingUp },
   { to: "/network", label: "Network", icon: Globe2 },
   { to: "/export", label: "Export", icon: Download },
   { to: "/checks", label: "Data & checks", icon: ClipboardCheck },
@@ -28,6 +29,7 @@ const hints: Record<string, string> = {
   "/pull-forward": "move demand out of overloaded windows",
   "/capacity": "weekly factory load from our assignments",
   "/network": "which factory ships where this week",
+  "/forecast": "demand that has not arrived yet, and the load it will bring",
   "/export": "fact_buy_plan_suggestions",
   "/checks": "validation, settings and data findings",
   "/planned": "what comes next",
@@ -114,9 +116,9 @@ export function Layout() {
           <div className="px-2.5 pb-1 pt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Plan</div>
           {nav.slice(0, 2).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Capacity</div>
-          {nav.slice(2, 5).map((n) => <NavItem key={n.to} {...n} />)}
+          {nav.slice(2, 6).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Deliver</div>
-          {nav.slice(5).map((n) => <NavItem key={n.to} {...n} />)}
+          {nav.slice(6).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Labs</div>
           <NavLink to="/planned"
             className={({ isActive }) => cx("flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition",

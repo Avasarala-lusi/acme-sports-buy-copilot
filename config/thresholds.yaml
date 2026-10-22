@@ -59,3 +59,7 @@ last_chance:
 
 backup_source: factory_chain     # [client] matrix certification gates each factory-chain step
                                  # assignment walks the factory chain (backup, its backup, ... to CN04, the last resort)
+
+forecast:
+  model: stage_seasonal          # stage_seasonal | extra_trees | gradient_boosting | seasonal_naive | moving_average
+                                 # chosen by the walk-forward backtest (lowest WAPE on the current data)

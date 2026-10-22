@@ -210,6 +210,40 @@ factory in the target window, and what stays behind is zero or still reaches MPQ
 back below 85%. Each recommendation reports units and the busiest week before and after, in both windows, plus the
 cost of the alternative (routing to the backup in the overloaded window).
 
+## 8b. Demand and load forecast (`engine/forecast.py`)
+
+At a given run the plan only knows the requisitions received so far, but requisitions keep arriving every week and
+reach production about three months later. The forecast estimates that unseen demand and the factory load it brings.
+
+- **Target**: plannable units arriving per MRP week at each primary factory (wholesale demand without an order is
+  excluded, as Rule 5 moves it to Future), 1-17 weeks ahead.
+- **No look-ahead**: every feature and model uses only weeks up to the run; a test scrambles all later weeks and
+  checks that nothing changes. Actuals from later weeks are shown in the app for comparison only.
+- **Signal**: demand follows the buying stage in the MRP calendar, which is scheduled in advance: fall/winter V1 is
+  about a tenth of V2/V3, spring/summer is flatter. Features are the stage (season type, range version, weeks into
+  the stage), the same stage in earlier seasons, the same week last year, recent level, horizon and factory.
+- **Model selection by walk-forward backtest** (30 forecast dates from week 40, 17 weeks ahead each):
+
+| Model | WAPE, all horizons |
+|---|---|
+| Stage-seasonal (same buying stage in earlier seasons) | **29.9%** (in use) |
+| Extra Trees, learning a correction to the stage baseline | 32.5% |
+| Same week last year | 33.6% |
+| Gradient boosting | 34.2% |
+| 4-week moving average | 79.6% |
+
+  With two years of data each buying stage has occurred at most twice, so the learned models cannot yet beat the
+  stage baseline; Extra Trees stays as the challenger (`forecast.model`) and is re-evaluated as data grows.
+- **Range**: P10-P90 from the model's own past forecast errors per horizon band, using only errors known at the run.
+  In the backtest 79% of actuals fall inside the 80% range.
+- **Load**: forecast units are released with the arrival-to-release lags observed so far, bought at the buying
+  window of the release date, produced from that window's PO date over the factory's article-master manufacturing
+  time (the client's planning default for demand that does not exist yet), spread by business days. The result is
+  unconstrained (at the primary factory, before backup routing), shown next to committed and known open load.
+- **Early warning**: a window whose busiest week is below 85% on known demand but at or above 85% with the forecast.
+- **Limits**: before a full year of history (about week 53) some future stages have no earlier season; the forecast
+  then falls back to the recent level, and the app says so.
+
 ## 9. Validation (agreed success criteria)
 
 | Check | Result |
@@ -256,6 +290,26 @@ Two effects of the changes are worth discussing with the client:
   ordered once that date has passed. Allowing urgent demand to be bought in a weekly run would recover most of this.
 - **Respecting capacity moves 4.6M units to planner review.** Demand exceeds what the factories can make at 100%;
   these lots need a decision (extra capacity, a third certified factory, a later date, or No-Go).
+
+### Evaluation against the client's baseline
+
+The client named the factory assignments recorded in `fact_purchase_requisitions` as the baseline, evaluated on the
+same requisitions and units that our plan buys. The baseline places each at its supplied factory with its own lead
+times, starting on the PO date of the run it appeared in (`engine/metrics.py: baseline_evaluation`).
+
+| Measure (same 8,939 requisitions) | Baseline | Our plan |
+|---|---|---|
+| Backup-triggered assignments | 54.2% | 10.2% |
+| Load spread across factories (average weekly standard deviation) | 72.7 pts | 24.6 pts |
+| Busiest factory each week (average) | 200.2% | 83.4% |
+| Factory-weeks above 100% | 55 | 0 |
+| Article-market lots below MOQ 300 | 22.6% | 11.8% |
+| Production cost | $643M | $613M |
+| Units on time | 97.0% | 40.7% |
+
+Our plan reduces backup-triggered assignments, lowers utilisation variance and protects MOQ per market, at lower
+cost and never above the 100% ceiling. Its on-time share is much lower: every late lot is a late start, where
+production begins on the buying window's PO date after the requisition's release date.
 
 ## 10. Deviations and assumptions
 

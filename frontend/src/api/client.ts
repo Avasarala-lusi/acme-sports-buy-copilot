@@ -1,6 +1,7 @@
 import type {
   Checks, Customer, DelayResult, LotDecision, Factory, Features, HoldResult, LotRequisition, Overrides, Plan,
   PullForward, CapacityRow, Requisition, Run, Settings, SwapResult, TrendPoint, Network,
+  ForecastView, Backtest,
 } from "./types";
 
 // Dev uses the Vite proxy (/api -> :8000). The built app is served by the API itself (same origin).
@@ -38,6 +39,8 @@ export const api = {
   checks: () => request<Checks>("/checks"),
   trend: () => request<TrendPoint[]>("/trend"),
   network: (run: string) => request<Network>(`/network/${run}`),
+  forecast: (run: string) => request<ForecastView>(`/forecast/${run}`),
+  backtest: () => request<Backtest>("/forecast-backtest"),
   features: () => request<Features>("/features"),
   pullForward: (run: string) => request<PullForward>(`/pull-forward/${run}`),
   acceptPull: (run: string, pr_ids: string[], target_run_id: string) =>

@@ -44,6 +44,7 @@ export interface Lot {
   inventory_exposure_days: number;
   inventory_exposure_basis: string;
   lead_time_source: string;
+  alternatives?: string;
   trans_days: number;
   on_time: boolean;
   on_time_units: number;
@@ -276,6 +277,7 @@ export interface Checks {
   units_by_outcome: Record<string, number>;
   rule_violations: number;
   comparison: { metric: string; our_plan: number; as_is_reference: number }[];
+  baseline: { metric: string; baseline: number; our_plan: number; better_if: "lower" | "higher" | null; note: string; improved: boolean | null }[];
 }
 
 export interface Settings {
@@ -314,4 +316,29 @@ export interface Network {
   run_id: string;
   routes: Route[];
   factories: { factory_id: string; country: string; weekly_capacity_units: number; cost_multiplier: number }[];
+}
+
+export interface ForecastView {
+  run_id: string;
+  origin_week: number;
+  model: string;
+  horizon_weeks: number;
+  stage_coverage_pct: number;
+  history: { factory: string; week: number; date: string; units: number }[];
+  intake: { factory: string; week: number; date: string; horizon: number; p10: number; p50: number; p90: number; actual: number | null }[];
+  load: {
+    factory_id: string; week: string; capacity: number; committed_units: number; known_open_units: number;
+    forecast_units: number; known_pct: number; forecast_pct: number; forecast_p90_pct: number;
+  }[];
+  windows: { window: string; factory_id: string; known_peak_pct: number; forecast_peak_pct: number; p90_peak_pct: number; early_warning: boolean; forecast_units: number }[];
+}
+
+export interface Backtest {
+  default_model: string;
+  coverage_pct: number;
+  origins: number;
+  horizon_weeks: number;
+  overall: { model: string; wape_pct: number }[];
+  by_horizon: { model: string; band: string; wape_pct: number }[];
+  network_by_horizon: { horizon: number; wape_pct: number }[];
 }
