@@ -13,8 +13,11 @@ import { int, pct } from "../lib/format";
 const FACTORIES = ["ACME-VN01", "ACME-BD02", "ACME-ID03", "ACME-CN04", "ACME-TR05", "ACME-IN06"];
 const MODEL_NAMES: Record<string, string> = {
   stage_seasonal: "Stage-seasonal", extra_trees: "Extra Trees (challenger)", gradient_boosting: "Gradient boosting",
+  random_forest: "Random Forest", xgboost: "XGBoost", sarimax: "SARIMAX (stage regressors)",
   seasonal_naive: "Same week last year", moving_average: "4-week moving average",
 };
+const STAGE_NAMES: Record<string, string> = { "0-1": "FW V1", "0-2": "FW V2", "0-3": "FW V3", "1-1": "SS V1", "1-2": "SS V2", "1-3": "SS V3" };
+const pval = (p: number) => (p < 1e-10 ? "p < 10⁻¹⁰" : `p = ${p.toExponential(1)}`);
 const short = (f: string) => f.replace("ACME-", "");
 const day = (iso: string) => iso.slice(0, 10);
 
@@ -23,6 +26,7 @@ export function Forecast() {
   const [factory, setFactory] = useState<string>("ALL");
   const fc = useQuery({ queryKey: ["forecast", runId], queryFn: () => api.forecast(runId) });
   const bt = useQuery({ queryKey: ["backtest"], queryFn: api.backtest, staleTime: Infinity });
+  const seas = useQuery({ queryKey: ["seasonality"], queryFn: api.seasonality, staleTime: Infinity });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, staleTime: Infinity });
   const s1 = useToken("--color-series-1"), s2 = useToken("--color-series-2"), s3 = useToken("--color-series-3");
   const grid = useToken("--color-grid"), axis = useToken("--color-axis"), ink = useToken("--color-ink");
@@ -154,6 +158,32 @@ export function Forecast() {
         </Card>
       </div>
 
+      {seas.data && (
+        <Card className="mb-5 p-5">
+          <SectionTitle hint={`${seas.data.weeks} weeks of weekly demand, whole network`}>Is demand seasonal? The evidence</SectionTitle>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-line p-3">
+              <div className="text-xs text-muted">Autocorrelation at 52 weeks</div>
+              <div className="font-num mt-1 text-lg">{seas.data.acf_lag52.toFixed(2)} <span className="text-xs text-faint">vs bound {seas.data.acf_bound_95.toFixed(2)}</span></div>
+              <div className="text-[11px] text-faint">{seas.data.acf_lag52_significant ? "Significant: demand repeats yearly" : "Not significant"}</div>
+            </div>
+            <div className="rounded-xl border border-line p-3">
+              <div className="text-xs text-muted">Demand differs by buying stage (Kruskal-Wallis)</div>
+              <div className="font-num mt-1 text-lg">H = {seas.data.kruskal_stage_h.toFixed(0)} <span className="text-xs text-faint">{pval(seas.data.kruskal_stage_p)}</span></div>
+              <div className="text-[11px] text-faint">by calendar month: H = {seas.data.kruskal_month_h.toFixed(0)}, {pval(seas.data.kruskal_month_p)}</div>
+            </div>
+            <div className="rounded-xl border border-line p-3">
+              <div className="text-xs text-muted">Average weekly demand by stage ({seas.data.stage_ratio_max_min.toFixed(0)}× swing)</div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {Object.entries(seas.data.stage_mean_units).map(([k, v]) => (
+                  <Badge key={k}>{STAGE_NAMES[k] ?? k} · {Math.round(v / 1000)}k</Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card className="overflow-hidden">
           <div className="border-b border-line px-5 py-3"><SectionTitle hint="busiest week in each window">Known vs forecast load by window</SectionTitle></div>
@@ -215,8 +245,9 @@ export function Forecast() {
             </table>
           )}
           <div className="border-t border-line px-5 py-2.5 text-xs text-faint">
-            WAPE = absolute error ÷ actual demand, per factory and week (lower is better). The model with the lowest error is used;
-            Extra Trees is kept as the challenger and takes over when it wins on more data.
+            WAPE = absolute error ÷ actual demand, per factory and week (lower is better). The ML models learn a correction to the stage
+            baseline; SARIMAX uses the stages as regressors (a 52-week seasonal ARIMA term needs two full years before each forecast).
+            The model with the lowest error is used; the others are re-tested as data grows.
           </div>
         </Card>
       </div>

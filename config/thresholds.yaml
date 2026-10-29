@@ -65,3 +65,6 @@ backup_source: factory_chain     # [client] matrix certification gates each fact
 forecast:
   model: stage_seasonal          # stage_seasonal | extra_trees | gradient_boosting | seasonal_naive | moving_average
                                  # chosen by the walk-forward backtest (lowest WAPE on the current data)
+
+impact:
+  price_per_unit_usd: 21         # [client] average price per unit to value late or undelivered units ($19-22 also fine)

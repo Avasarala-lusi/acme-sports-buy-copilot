@@ -14,6 +14,7 @@ import { PullForward } from "./pages/PullForward";
 import { Export } from "./pages/Export";
 import { Checks } from "./pages/Checks";
 import { Planned } from "./pages/Planned";
+import { Impact } from "./pages/Impact";
 import { Loading } from "./components/ui";
 
 // The chart library is large; load the capacity page only when it is opened.
@@ -40,6 +41,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="capacity" element={<Suspense fallback={<Loading />}><Capacity /></Suspense>} />
               <Route path="forecast" element={<Suspense fallback={<Loading />}><Forecast /></Suspense>} />
               <Route path="network" element={<Suspense fallback={<Loading />}><Network /></Suspense>} />
+              <Route path="impact" element={<Impact />} />
               <Route path="export" element={<Export />} />
               <Route path="checks" element={<Checks />} />
               <Route path="planned" element={<Planned />} />

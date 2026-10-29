@@ -45,3 +45,14 @@ def test_backtest_picks_a_model_that_beats_the_naive_level(planner):
     overall = bt["overall"].set_index("model")["wape_pct"]
     assert overall[bt["default_model"]] <= overall["moving_average"]
     assert 0 <= bt["coverage_pct"] <= 100
+
+
+def test_demand_is_seasonal(planner):
+    t = fc.seasonality_tests(planner)
+    assert t["acf_lag52_significant"] and t["kruskal_stage_p"] < 0.01 and t["stage_ratio_max_min"] > 2
+
+
+def test_sarimax_forecasts_every_factory_and_week(planner):
+    series = fc.intake_series(planner)
+    out = fc.sarimax_predict(series, 60, 17)
+    assert len(out) == 6 * 17 and (out["p50"] >= 0).all()

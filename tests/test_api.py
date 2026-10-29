@@ -112,3 +112,8 @@ def test_checks_include_baseline_evaluation(client):
 def test_forecast_endpoint(client):
     f = client.get(f"/forecast/{RUN}").json()
     assert f["intake"] and f["load"] and f["windows"] and f["origin_week"] == int(RUN[-3:])
+
+
+def test_impact_endpoint(client):
+    r = client.get("/impact?price=21").json()
+    assert r["price_per_unit_usd"] == 21 and r["by_market"] and r["top_customers"]

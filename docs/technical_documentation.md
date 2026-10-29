@@ -222,18 +222,28 @@ reach production about three months later. The forecast estimates that unseen de
 - **Signal**: demand follows the buying stage in the MRP calendar, which is scheduled in advance: fall/winter V1 is
   about a tenth of V2/V3, spring/summer is flatter. Features are the stage (season type, range version, weeks into
   the stage), the same stage in earlier seasons, the same week last year, recent level, horizon and factory.
-- **Model selection by walk-forward backtest** (30 forecast dates from week 40, 17 weeks ahead each):
+- **Seasonality is established first** (`forecast.seasonality_tests`, weekly network demand, 100 weeks):
+  autocorrelation at the 52-week lag is 0.43 against a 95% bound of 0.20; weekly demand differs between buying stages
+  (Kruskal-Wallis H = 85, p < 10^-10) and calendar months (H = 92, p < 10^-10); fall/winter V3 averages 263k units a
+  week against 22k in fall/winter V1 (12x). An STL decomposition is reported as indicative only, since 100 weeks hold
+  fewer than two full cycles.
+- **Model selection by walk-forward backtest** (30 forecast dates from week 40, 17 weeks ahead each, only past data):
 
 | Model | WAPE, all horizons |
 |---|---|
 | Stage-seasonal (same buying stage in earlier seasons) | **29.9%** (in use) |
 | Extra Trees, learning a correction to the stage baseline | 32.5% |
+| Random Forest, same formulation | 32.9% |
+| XGBoost, same formulation | 33.0% |
 | Same week last year | 33.6% |
-| Gradient boosting | 34.2% |
+| Gradient boosting, same formulation | 34.2% |
+| SARIMAX, AR(1) with the buying stage as regressors | 34.4% |
 | 4-week moving average | 79.6% |
 
   With two years of data each buying stage has occurred at most twice, so the learned models cannot yet beat the
-  stage baseline; Extra Trees stays as the challenger (`forecast.model`) and is re-evaluated as data grows.
+  stage baseline (Extra Trees ties it 1-4 weeks ahead). A seasonal ARIMA term with a 52-week period needs two full
+  years before each forecast date, which 100 weeks never provide, so SARIMAX uses the stages as regressors instead.
+  The learned models stay as challengers (`forecast.model`) and are re-tested as data grows.
 - **Range**: P10-P90 from the model's own past forecast errors per horizon band, using only errors known at the run.
   In the backtest 79% of actuals fall inside the 80% range.
 - **Load**: forecast units are released with the arrival-to-release lags observed so far, bought at the buying
@@ -317,6 +327,32 @@ automatically: it stays in planner review, marked as late (`capacity.retried_lat
 restores automatic late purchases). With automatic late purchases the on-time share was 40.7%: those lots arrived a
 median 45 days late, and the client asked for such conflicts to be surfaced for the planner rather than resolved
 automatically.
+
+### Late-delivery impact (`engine/impact.py`, Delivery impact page)
+
+The client asked where the lower on-time share falls, who is affected and what it is worth. Scope is firm demand
+(17,039 requisitions, 12.17M units: everything except wholesale forecasts without an order and demand still open at
+the end of the data). Each requisition is on time, late, or not bought (no capacity; left with the planner).
+
+| Firm demand | Baseline | Our plan |
+|---|---|---|
+| On time | 11.92M (98.0%) | 4.87M (40.0%) |
+| Late | 0.25M (2.0%) | 1.63M (13.4%), median 5 days; none over 60 days |
+| Not bought (no capacity, planner decides) | 0 | 5.67M (46.6%) |
+
+- **Value**: 7.05M more units are not on time than in the baseline; at the client's average of $21 per unit that is
+  **$148M** ($134-155M at $19-22). The actual sales orders in the data average about $195 per unit, so order-value
+  figures are roughly nine times higher; both are shown, with the $21 average as the headline per the client.
+- **Where it falls**: across all markets (on time 38-42% in every market; the largest market, Brazil, carries 22% of
+  the gap in proportion to its size) and all customers, with footwear hit harder than apparel (36% vs 45% on time) and
+  boots (BT) the most (29%). The largest accounts by volume (Amazon, Costco, ACME's own channels in Brazil and Mexico)
+  carry the most units.
+- **Why the baseline is on time**: it ignores capacity. Delivering it would require 6.95M units (57% of firm demand)
+  beyond 100% of factory capacity, in 81 factory-weeks, peaking at 1,335%. Firm demand averages 112.6k units a week
+  against a network capacity of 110k. Our plan never exceeds 100%; the units that do not fit are the 5.67M left for
+  a planner decision (extra capacity, a later date, or No-Go), not units the plan chose to make late.
+- The production-cost saving ($27M on the same requisitions) is far smaller than the value not delivered on time,
+  so the plan is not "profit-neutral"; the trade-off is capacity, not cost.
 
 ## 10. Deviations and assumptions
 

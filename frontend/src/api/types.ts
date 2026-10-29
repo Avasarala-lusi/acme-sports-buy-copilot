@@ -342,3 +342,59 @@ export interface Backtest {
   by_horizon: { model: string; band: string; wape_pct: number }[];
   network_by_horizon: { horizon: number; wape_pct: number }[];
 }
+
+export interface ImpactRow {
+  units: number;
+  baseline_on_time_pct: number;
+  plan_on_time_pct: number;
+  plan_late_units: number;
+  not_bought_units: number;
+  extra_late_or_unbought_units: number;
+  usd_at_price: number;
+  plan_median_days_late: number;
+  [dimension: string]: string | number;
+}
+
+export interface ImpactStatus { units: number; share_pct: number; usd_at_price: number; usd_order_value: number }
+
+export interface Impact {
+  price_per_unit_usd: number;
+  price_range_usd: [number, number];
+  order_value_per_unit_usd: number;
+  baseline_units_above_capacity: number;
+  baseline_units_above_capacity_pct: number;
+  baseline_weeks_over_capacity: number;
+  baseline_peak_utilization_pct: number;
+  firm_units_per_week: number;
+  network_weekly_capacity: number;
+  firm_requisitions: number;
+  firm_units: number;
+  plan: Record<string, ImpactStatus>;
+  baseline: Record<string, ImpactStatus>;
+  plan_median_days_late: number;
+  extra_units_not_on_time: number;
+  extra_usd_at_price: number;
+  extra_usd_range: [number, number];
+  largest_market_share_of_extra_pct: number;
+  late_bands: { band: string; plan_units: number; baseline_units: number }[];
+  by_market: ImpactRow[];
+  by_category: ImpactRow[];
+  by_product_line: ImpactRow[];
+  by_channel: ImpactRow[];
+  by_segment: ImpactRow[];
+  top_customers: ImpactRow[];
+}
+
+export interface Seasonality {
+  weeks: number;
+  stl_seasonal_strength: number;
+  acf_lag52: number;
+  acf_bound_95: number;
+  acf_lag52_significant: boolean;
+  kruskal_stage_h: number;
+  kruskal_stage_p: number;
+  kruskal_month_h: number;
+  kruskal_month_p: number;
+  stage_mean_units: Record<string, number>;
+  stage_ratio_max_min: number;
+}

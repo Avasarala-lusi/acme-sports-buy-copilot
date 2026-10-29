@@ -125,6 +125,17 @@ def _extra_trees(seed: int = 0):
     return ExtraTreesRegressor(n_estimators=300, min_samples_leaf=3, max_features=0.8, random_state=seed, n_jobs=-1)
 
 
+def _random_forest(seed: int = 0):
+    from sklearn.ensemble import RandomForestRegressor
+    return RandomForestRegressor(n_estimators=300, min_samples_leaf=3, max_features=0.8, random_state=seed, n_jobs=-1)
+
+
+def _xgboost(seed: int = 0):
+    from xgboost import XGBRegressor
+    return XGBRegressor(n_estimators=300, learning_rate=0.05, max_depth=4, subsample=0.8, colsample_bytree=0.8,
+                        random_state=seed, n_jobs=4, verbosity=0)
+
+
 def _gbm(seed: int = 0):
     from sklearn.ensemble import HistGradientBoostingRegressor
     return HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, random_state=seed)
@@ -139,18 +150,92 @@ def fit_predict(train: pd.DataFrame, test: pd.DataFrame, model: str = "stage_sea
         out["p50"] = np.where(test["has_lag52"] > 0, test["lag52"], test["mean8"])
     elif model == "moving_average":
         out["p50"] = test["mean4"].to_numpy()
-    elif model in ("extra_trees", "gradient_boosting"):
+    elif model in LEARNERS:
         # learn the ratio of actual demand to the stage baseline, on weeks that have an earlier season to compare with
         rows = train[train["has_stage"] > 0]
         if len(rows) < 100:
             out["p50"] = test["stage_mean"].to_numpy()
         else:
-            m = _extra_trees() if model == "extra_trees" else _gbm()
+            m = LEARNERS[model]()
             m.fit(rows[FEATURES], rows["target"] / rows["stage_mean"].clip(lower=1.0))
             out["p50"] = (test["stage_mean"] * m.predict(test[FEATURES])).clip(lower=0).to_numpy()
     else:
         raise ValueError(f"unknown forecast model {model}")
     return out
+
+
+LEARNERS = {"extra_trees": _extra_trees, "random_forest": _random_forest, "xgboost": _xgboost,
+            "gradient_boosting": _gbm}
+
+
+def sarimax_predict(series: pd.DataFrame, origin: int, horizon: int) -> pd.DataFrame:
+    """SARIMAX per factory on log units up to the origin, with the buying stage (season type x range version, known
+    in advance from the MRP calendar) as regressors. A seasonal ARIMA term with a 52-week period needs at least two
+    full years before the origin, which 100 weeks never provide, so seasonality enters through the stage regressors."""
+    import warnings
+
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+    cal = series.drop_duplicates("week").set_index("week").sort_index()
+    stages = sorted(cal["stage"].unique())
+    pivot = series.pivot(index="week", columns="factory", values="units").sort_index()
+    weeks = list(range(origin + 1, origin + horizon + 1))
+    last_stage = cal.loc[origin, "stage"]
+    future_stage = [cal.loc[w, "stage"] if w in cal.index else last_stage for w in weeks]
+
+    def dummies(stage_list):
+        return pd.DataFrame([[1.0 if s == st else 0.0 for st in stages] for s in stage_list], columns=stages)
+
+    x_hist = dummies(list(cal.loc[:origin, "stage"]))
+    keep = [c for c in stages if x_hist[c].sum() > 0]  # stages seen so far; unseen ones fall back to the level
+    rows = []
+    for f in pivot.columns:
+        y = np.log1p(pivot.loc[:origin, f].to_numpy(dtype=float))
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                res = SARIMAX(y, exog=x_hist[keep].to_numpy()[:, 1:] if len(keep) > 1 else None, order=(1, 0, 0),
+                              trend="c").fit(disp=False)
+                xf = dummies(future_stage)[keep].to_numpy()[:, 1:] if len(keep) > 1 else None
+                pred = np.expm1(res.forecast(steps=horizon, exog=xf)).clip(min=0)
+        except Exception:  # not enough history to fit: recent level
+            pred = np.repeat(pivot.loc[max(1, origin - 3):origin, f].mean(), horizon)
+        rows += [{"factory": f, "week": w, "p50": float(v)} for w, v in zip(weeks, pred)]
+    return pd.DataFrame(rows)
+
+
+def seasonality_tests(planner: Planner) -> dict:
+    """Evidence that weekly demand is seasonal (client asked to prove it before choosing a method).
+
+    - Seasonal strength from an STL decomposition with a 52-week period (Hyndman's F_s). Indicative only: with fewer
+      than two full cycles in 100 weeks, STL can fit most of the series into the seasonal part.
+    - Autocorrelation at the 52-week lag against its 95% significance bound.
+    - Kruskal-Wallis test: does weekly demand differ between buying stages (season type x range version)?
+    - Same test across calendar months.
+    """
+    from scipy.stats import kruskal
+    from statsmodels.tsa.seasonal import STL
+    from statsmodels.tsa.stattools import acf
+
+    series = intake_series(planner)
+    total = series.groupby("week").agg(units=("units", "sum"), stage=("stage", "first"), date=("date", "first"))
+    y = np.log1p(total["units"].to_numpy(dtype=float))
+    stl = STL(y, period=52, robust=True).fit()
+    strength = max(0.0, 1 - np.var(stl.resid) / np.var(stl.seasonal + stl.resid))
+    r = acf(y, nlags=52, fft=False)
+    bound = 1.96 / np.sqrt(len(y))
+    by_stage = [g["units"].to_numpy() for _, g in total.groupby("stage")]
+    by_month = [g["units"].to_numpy() for _, g in total.groupby(total["date"].dt.month)]
+    stage_means = total.groupby("stage")["units"].mean()
+    return {
+        "weeks": int(len(y)),
+        "stl_seasonal_strength": float(strength),
+        "acf_lag52": float(r[52]), "acf_bound_95": float(bound), "acf_lag52_significant": bool(abs(r[52]) > bound),
+        "kruskal_stage_h": float(kruskal(*by_stage).statistic), "kruskal_stage_p": float(kruskal(*by_stage).pvalue),
+        "kruskal_month_h": float(kruskal(*by_month).statistic), "kruskal_month_p": float(kruskal(*by_month).pvalue),
+        "stage_mean_units": {k: float(v) for k, v in stage_means.items()},
+        "stage_ratio_max_min": float(stage_means.max() / max(stage_means.min(), 1.0)),
+    }
 
 
 BANDS = [(1, 4), (5, 8), (9, 99)]
@@ -298,7 +383,8 @@ def backtest(planner: Planner, first_origin: int = 40, step: int = 2) -> dict:
     series = intake_series(planner)
     H = horizon_weeks(planner)
     default = planner.cfg.get("forecast", {}).get("model", "stage_seasonal")
-    models = ["stage_seasonal", "extra_trees", "gradient_boosting", "seasonal_naive", "moving_average"]
+    models = ["stage_seasonal", "extra_trees", "random_forest", "xgboost", "gradient_boosting", "sarimax",
+              "seasonal_naive", "moving_average"]
     last = int(series["week"].max())
     preds = []
     for origin in range(first_origin, last - 1, step):
@@ -307,7 +393,12 @@ def backtest(planner: Planner, first_origin: int = 40, step: int = 2) -> dict:
             continue
         train = training_rows(series, origin, H)
         for model in models:
-            pr = fit_predict(train, test, model)
+            if model == "sarimax":
+                sx = sarimax_predict(series, origin, H).set_index(["factory", "week"])["p50"]
+                pr = test[["factory", "origin", "week", "horizon", "date"]].copy()
+                pr["p50"] = [sx.get((f, w), np.nan) for f, w in zip(test["factory"], test["week"])]
+            else:
+                pr = fit_predict(train, test, model)
             if model == default:
                 pr = add_range(pr, error_ratios(series, origin, H, model))
             pr["actual"], pr["model"] = test["target"].to_numpy(), model

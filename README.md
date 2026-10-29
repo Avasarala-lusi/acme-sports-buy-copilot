@@ -14,7 +14,8 @@ supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client
 - **Go/No-Go decisions:** saved changes replay later demand and capacity. Hold/Delay applies to one window;
   No-Go cancels selected PRs. Approvals and last-chance status never bypass the 100% ceiling.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows; moves are tested together on one ledger with MOQ and MPQ checks.
-- **Demand and load forecast:** demand that has not arrived yet, 17 weeks ahead with a P10-P90 range, turned into factory load with early warnings; the model is chosen by a walk-forward backtest.
+- **Demand and load forecast:** demand that has not arrived yet, 17 weeks ahead with a P10-P90 range, turned into factory load with early warnings; the model is chosen by a walk-forward backtest of eight models (including SARIMAX, XGBoost, Random Forest), after testing that demand is seasonal.
+- **Delivery impact:** where late or undelivered demand falls (market, product line, channel, customer) and its value at the client's $21/unit average.
 - **Trend notebook** (`notebooks/trend_analysis.ipynb`): the five required analyses over 100 weeks: seasonal demand, factory utilisation and backup triggers, pull-forward opportunities, forecast vs confirmed-order coverage, and sales value by market and credit rating.
 - **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan and evaluation against the client's baseline.
 - **Documentation:** `docs/technical_documentation.md`; hand-checkable calculations in `docs/worked_examples.md`;

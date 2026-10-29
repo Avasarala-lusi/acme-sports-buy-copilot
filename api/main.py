@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from engine import forecast, pull_forward
+from engine import forecast, impact, pull_forward
 from engine.calendar import window_label
 from engine.accounting import accounting_report, rule_violations
 from engine.metrics import baseline_evaluation, comparison_table
@@ -434,10 +434,31 @@ def _backtest_cached():
     return _json(forecast.cached_backtest(automatic_planner()))
 
 
+@lru_cache
+def _seasonality():
+    return _json(forecast.seasonality_tests(automatic_planner()))
+
+
+@app.get("/forecast-seasonality")
+def forecast_seasonality():
+    return _seasonality()
+
+
 @app.get("/forecast-backtest")
 def forecast_backtest():
     with _backtest_lock:  # about a minute the first time; never run it twice in parallel
         return _backtest_cached()
+
+
+@lru_cache(maxsize=8)
+def _impact(price: float):
+    return _json(impact.impact_report(automatic_planner(), price))  # the automatic plan, as in the evaluation
+
+
+@app.get("/impact")
+def impact_view(price: float = Query(21.0, ge=1, le=1000)):
+    """Late and undelivered firm demand, plan vs baseline, by market, product line, channel and customer."""
+    return _impact(round(price, 2))
 
 
 @app.get("/export/{run_id}")
