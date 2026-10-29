@@ -19,7 +19,7 @@ buying_window:
   lookahead_windows: 4           # spec 3.3: project load over the next 4 windows
 
 priority:
-  tie_break: revenue_then_rdd    # assumption: confirmed first, NSV descending, then RDD
+  tie_break: rdd_then_revenue    # [client, Oct 29] equal release dates: earliest RDD, highest NSV, order-backed first
 
 date_policy:
   manufacturing_duration: calendar_days

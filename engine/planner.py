@@ -180,12 +180,14 @@ class Planner:
         return min(self.rows[p]["rdd_original"] for p in pr_ids)
 
     def priority_key(self, ids):
-        """Explicit tie policy; category/factory MPQ remains a separate feasibility gate."""
+        """Allocation order when capacity is short. Client (Oct 29): last chance, then earliest release date; ties on
+        the release date go to the earliest RDD, then the highest net sales value, then order-backed demand.
+        Category/factory MPQ remains a separate feasibility gate."""
         def key(pr_id):
             pr=self.rows[pr_id]
-            tie=(-int(pr["has_order"]),-pr["nsv"],pr["rdd_original"])
-            if self.cfg.get("priority",{}).get("tie_break")=="rdd_then_revenue":
-                tie=(pr["rdd_original"],-int(pr["has_order"]),-pr["nsv"])
+            tie=(pr["rdd_original"],-pr["nsv"],-int(pr["has_order"]))
+            if self.cfg.get("priority",{}).get("tie_break")=="revenue_then_rdd":  # earlier reading, kept as an option
+                tie=(-int(pr["has_order"]),-pr["nsv"],pr["rdd_original"])
             return (-int(pr["last_chance"]),pr["release_primary"],*tie,pr_id)
         return min(key(p) for p in ids)  # consolidated lot inherits its highest-priority PR
 

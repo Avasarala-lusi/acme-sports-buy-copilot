@@ -47,7 +47,7 @@ def settings_items(cfg: dict) -> list[dict]:
     }
     rows=[(t,*replacements[t]) if t in replacements else (t,s,st) for t,s,st in rows]
     rows.extend([
-        ("Priority ties",cfg.get("priority",{}).get("tie_break","revenue_then_rdd"),"Assumption: NSV vs RDD order"),
+        ("Priority ties","Earliest RDD, then highest NSV, then order-backed" if cfg.get("priority",{}).get("tie_break","rdd_then_revenue")=="rdd_then_revenue" else "Order-backed, then NSV, then RDD","Client decision (Oct 29)"),
         ("MPQ", "Same article, factory, buying window and 15-day RDD span; category chooses threshold", "Client confirmed"),
         ("Suggested RDD", "PO + manufacture + transit; signed exposure vs original RDD", "User adopted"),
         ("Hold / Delay", "One-window scope; outstanding demand returns later; No-Go cancels", "Assumption: reversible saved decisions"),

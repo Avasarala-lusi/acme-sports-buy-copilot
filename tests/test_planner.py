@@ -143,3 +143,16 @@ def test_retried_demand_is_not_bought_late_automatically(planner):
                 if planner.rows[p]["release_primary"] < lot.production_start:
                     late.append((lot.lot_id, p))
     assert not late, late[:5]
+
+
+def test_equal_release_dates_go_to_the_earliest_rdd_then_sales_value(planner):
+    """Client (Oct 29): ties on the release date go to the earliest RDD, then the highest NSV, then order-backed."""
+    prs = planner.prs[~planner.prs["last_chance"]]
+    same = prs.groupby("release_primary").filter(lambda g: g["rdd_original"].nunique() > 1)
+    g = same[same["release_primary"] == same["release_primary"].iloc[0]].sort_values("rdd_original")
+    early, late = g["pr_id"].iloc[0], g["pr_id"].iloc[-1]
+    assert planner.priority_key([early]) < planner.priority_key([late])
+    ties = prs.groupby(["release_primary", "rdd_original"]).filter(lambda x: x["nsv"].nunique() > 1)
+    t = ties[(ties["release_primary"] == ties["release_primary"].iloc[0])
+             & (ties["rdd_original"] == ties["rdd_original"].iloc[0])].sort_values("nsv", ascending=False)
+    assert planner.priority_key([t["pr_id"].iloc[0]]) < planner.priority_key([t["pr_id"].iloc[-1]])
