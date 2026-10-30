@@ -156,3 +156,25 @@ def test_equal_release_dates_go_to_the_earliest_rdd_then_sales_value(planner):
     t = ties[(ties["release_primary"] == ties["release_primary"].iloc[0])
              & (ties["rdd_original"] == ties["rdd_original"].iloc[0])].sort_values("nsv", ascending=False)
     assert planner.priority_key([t["pr_id"].iloc[0]]) < planner.priority_key([t["pr_id"].iloc[-1]])
+
+
+def test_production_order_mpq_scope():
+    """Proposed MPQ scope: one production order per article, factory and buying window, whatever the RDD spread.
+    Every bought order meets MPQ unless it is a last-chance buy, market lots keep their 15-day span, and it buys
+    at least as much as the 15-day MPQ bands."""
+    from engine.config import load_config
+    from engine.planner import Planner
+    from engine.rules.quantities import mpq_for
+    cfg = load_config()
+    cfg["quantities"]["mpq_scope"] = "purchase"
+    pl = Planner(config=cfg)
+    pl.plan_all()
+    assert rule_violations(pl).empty
+    lots = pl.bought_lots()
+    orders = lots.groupby(["run_id", "article_id", "assigned_factory"]).agg(
+        qty=("consolidated_qty", "sum"), category=("category", "first"), last_chance=("last_chance", "any"))
+    short = orders[orders["qty"] < orders["category"].map(lambda c: mpq_for(c, cfg["quantities"]["mpq"]))]
+    assert short["last_chance"].all()
+    base = Planner()
+    base.plan_all()
+    assert lots["consolidated_qty"].sum() >= base.bought_lots()["consolidated_qty"].sum()

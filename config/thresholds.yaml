@@ -43,6 +43,9 @@ quantities:
   mpq:
     apparel: 1200
     footwear: 2400
+  # MPQ group: rdd_band = article/factory/window within one 15-day RDD span (current);
+  # purchase = one production order per article/factory/window (proposed to the client, Oct 29)
+  mpq_scope: rdd_band
 
 grouping:
   window_days: 15                # spec rule 2
@@ -68,3 +71,26 @@ forecast:
 
 impact:
   price_per_unit_usd: 21         # [client] average price per unit to value late or undelivered units ($19-22 also fine)
+
+risk:                            # [assumption] lead-time variation for on-time probability
+  simulations: 20000             # draws per factory for the delay distribution
+  early_share_of_range: 0.25     # a lot can finish up to 25% of the factory's quoted lead-time range early
+  late_share_of_range: 0.5       # ... and run up to 50% of the range late (delays are larger than gains)
+  seed: 7
+
+optimizer:                       # network planning: all certified factories together, 100% weekly capacity
+  # weight: 0 = cheapest plan, 1 = safest plan (most units expected on time); the recommended one comes from the benchmark
+  time_limit_s: 20               # the gap to the best possible plan is under 1% by then
+  mip_gap: 0.005
+  enforce_mpq: true              # one production order per article/factory/window must reach MPQ
+  backup_penalty_per_unit: 0.1   # [assumption] a backup factory must save >10% of unit cost (or lateness) to be chosen
+
+benchmark:
+  tuning_seasons: [FW25, SS26]   # the optimiser's recommended weight is chosen on these seasons only
+  test_seasons: [FW26, SS27]     # results are reported on seasons not used for tuning
+  weights: [0.0, 0.25, 0.5, 0.75, 1.0]
+
+data_health:
+  qty_robust_z: 5                # requisition quantity unusual for its article (robust z-score)
+  volume_change_pct: 60          # run intake differs from the trailing median of 8 runs by more than this
+  rdd_horizon_days: 400          # RDD further out than this from the MRP run date

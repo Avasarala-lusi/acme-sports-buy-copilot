@@ -1,8 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Activity, Gauge, LineChart, MessageSquare, ShieldAlert, SlidersHorizontal, Trophy } from "lucide-react";
 import { api } from "../api/client";
 import type { Features } from "../api/types";
 import { Badge, Card, PageHeader } from "../components/ui";
+
+const ROUTES: Partial<Record<keyof Features, string>> = {
+  forecast: "/forecast", optimizer: "/optimizer", risk: "/risk", drill: "/drill", benchmark: "/benchmark", data_health: "/data-health",
+};
 
 const items: { key: keyof Features; icon: typeof Gauge; title: string; text: string }[] = [
   { key: "forecast", icon: LineChart, title: "Load forecast", text: "Predict each factory's load four buying windows ahead, so demand is pulled forward before a factory overloads." },
@@ -18,12 +23,12 @@ export function Planned() {
   const features = useQuery({ queryKey: ["features"], queryFn: api.features, staleTime: Infinity });
   return (
     <>
-      <PageHeader eyebrow="Roadmap" title="Planned capabilities" subtitle="Extensions in development. Each appears here as soon as it is enabled in the planning engine." />
+      <PageHeader eyebrow="Roadmap" title="Capabilities" subtitle="Extensions to the rule engine. Open any available one; the rest are in development." />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map(({ key, icon: Icon, title, text }) => {
           const on = features.data?.[key] ?? false;
-          return (
-            <Card key={key} className="p-5">
+          const card = (
+            <Card className={on ? "h-full p-5 transition hover:border-line-strong" : "h-full p-5"}>
               <div className="mb-3 flex items-center justify-between">
                 <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-accent"><Icon size={18} /></div>
                 {on ? <Badge tone="good">Available</Badge> : <Badge tone="neutral">Coming soon</Badge>}
@@ -32,6 +37,7 @@ export function Planned() {
               <p className="mt-1 text-sm text-muted">{text}</p>
             </Card>
           );
+          return on && ROUTES[key] ? <Link key={key} to={ROUTES[key]!}>{card}</Link> : <div key={key}>{card}</div>;
         })}
       </div>
     </>

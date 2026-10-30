@@ -83,5 +83,5 @@ def rule_violations(planner: Planner) -> pd.DataFrame:
         for band in planner.mpq_groups(run_lots.to_dict("records")):
             minimum=mpq_for(band[0]["category"],planner.cfg["quantities"]["mpq"])
             if sum(r["consolidated_qty"] for r in band)<minimum and not any(r["last_chance"] for r in band):
-                rows.extend((r["lot_id"],"MPQ not met within 15-day article/factory group") for r in band)
+                rows.extend((r["lot_id"],"MPQ not met within article/factory group") for r in band)
     return pd.DataFrame(rows, columns=["lot_id", "violation"])

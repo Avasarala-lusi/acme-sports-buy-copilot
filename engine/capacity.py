@@ -16,13 +16,19 @@ def _weekly_units():
 
 
 class CapacityLedger:
-    def __init__(self, weekly_capacity: dict[str, int], spread: bool = True):
+    def __init__(self, weekly_capacity: dict[str, int], spread: bool = True, closures=None):
         self.capacity = dict(weekly_capacity)
         self.spread = spread
         self.units: dict[str, dict[date, float]] = defaultdict(_weekly_units)
+        # disruption drill: (factory, first day, last day) periods with no capacity
+        self.closures = [(f, pd.Timestamp(a), pd.Timestamp(b)) for f, a, b in closures or []]
+
+    def closed(self, factory: str, week) -> bool:
+        return any(f == factory and a <= pd.Timestamp(week) <= b for f, a, b in self.closures)
 
     def copy(self) -> "CapacityLedger":
         new = CapacityLedger(self.capacity, self.spread)
+        new.closures = self.closures
         new.units = deepcopy(self.units)
         return new
 
@@ -48,8 +54,10 @@ class CapacityLedger:
     def utilization_with(self, factory: str, start, mfg_days: int, qty: float) -> float:
         """Highest utilisation (%) over the lot's production weeks if the lot were added."""
         cap = self.capacity[factory]
-        return max((self.units[factory].get(w, 0.0) + n) / cap * 100
-                   for w, n in self.allocations(start, mfg_days, qty))
+        alloc = self.allocations(start, mfg_days, qty)
+        if self.closures and any(n > 0 and self.closed(factory, w) for w, n in alloc):
+            return float("inf")  # the factory is closed in part of the production period
+        return max((self.units[factory].get(w, 0.0) + n) / cap * 100 for w, n in alloc)
 
     def add(self, factory: str, start, mfg_days: int, qty: float) -> None:
         for w, n in self.allocations(start, mfg_days, qty):

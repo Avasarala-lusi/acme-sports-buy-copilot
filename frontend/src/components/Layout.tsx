@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, TrendingUp, CircleDollarSign, CalendarClock, Globe2, ChevronLeft, ChevronRight, ClipboardCheck, Download, FlaskConical, Layers, ListChecks,
+  Activity, BarChart3, Gauge, HeartPulse, SlidersHorizontal, Trophy, TrendingUp, CircleDollarSign, CalendarClock, Globe2, ChevronLeft, ChevronRight, ClipboardCheck, Download, FlaskConical, Layers, ListChecks,
   Monitor, Moon, RotateCcw, Search, ShoppingCart, Sparkles, Sun,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -20,10 +20,15 @@ const nav = [
   { to: "/forecast", label: "Forecast", icon: TrendingUp },
   { to: "/network", label: "Network", icon: Globe2 },
   { to: "/impact", label: "Delivery impact", icon: CircleDollarSign },
+  { to: "/optimizer", label: "Cost vs service", icon: SlidersHorizontal },
+  { to: "/risk", label: "On-time risk", icon: Gauge },
+  { to: "/drill", label: "Disruption drill", icon: Activity },
+  { to: "/benchmark", label: "Benchmark", icon: Trophy },
   { to: "/export", label: "Export", icon: Download },
   { to: "/checks", label: "Data & checks", icon: ClipboardCheck },
+  { to: "/data-health", label: "Data health", icon: HeartPulse },
 ];
-const pages = [...nav.map(({ to, label }) => ({ to, label })), { to: "/planned", label: "Planned capabilities" }];
+const pages = [...nav.map(({ to, label }) => ({ to, label })), { to: "/planned", label: "Capabilities" }];
 const hints: Record<string, string> = {
   "/": "what to buy, from which factory, and why",
   "/what-if": "test a hold, delay or factory switch on a copy",
@@ -34,6 +39,11 @@ const hints: Record<string, string> = {
   "/impact": "who receives late or undelivered demand, and what it is worth",
   "/export": "fact_buy_plan_suggestions",
   "/checks": "validation, settings and data findings",
+  "/optimizer": "plan all factories together, from cheapest to safest",
+  "/risk": "chance each lot arrives on time when lead times vary",
+  "/drill": "close a factory and compare how the plans respond",
+  "/benchmark": "rules, optimiser and today's assignments, season by season",
+  "/data-health": "unusual records in each data load",
   "/planned": "what comes next",
 };
 const icons: Record<string, typeof ListChecks> = Object.fromEntries([...nav.map((n) => [n.to, n.icon]), ["/planned", Sparkles]]);
@@ -119,14 +129,16 @@ export function Layout() {
           {nav.slice(0, 2).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Capacity</div>
           {nav.slice(2, 7).map((n) => <NavItem key={n.to} {...n} />)}
+          <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Optimise</div>
+          {nav.slice(7, 11).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Deliver</div>
-          {nav.slice(7).map((n) => <NavItem key={n.to} {...n} />)}
+          {nav.slice(11).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Labs</div>
           <NavLink to="/planned"
             className={({ isActive }) => cx("flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition",
               isActive ? "bg-sidebar font-medium text-ink" : "text-muted hover:bg-sidebar/60 hover:text-ink")}>
-            <Sparkles size={15} className="text-faint" /> Planned capabilities
-            <span className="ml-auto rounded bg-manual-soft px-1.5 font-mono text-[10px] text-manual">soon</span>
+            <Sparkles size={15} className="text-faint" /> Capabilities
+            <span className="ml-auto rounded bg-manual-soft px-1.5 font-mono text-[10px] text-manual">1 soon</span>
           </NavLink>
         </nav>
 

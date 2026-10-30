@@ -15,6 +15,9 @@ import { Export } from "./pages/Export";
 import { Checks } from "./pages/Checks";
 import { Planned } from "./pages/Planned";
 import { Impact } from "./pages/Impact";
+import { Risk } from "./pages/Risk";
+import { Drill } from "./pages/Drill";
+import { Benchmark } from "./pages/Benchmark";
 import { Loading } from "./components/ui";
 
 // The chart library is large; load the capacity page only when it is opened.
@@ -22,6 +25,8 @@ const Capacity = lazy(() => import("./pages/Capacity").then((m) => ({ default: m
 // The globe (three.js) is larger still; load it only on the network page.
 const Forecast = lazy(() => import("./pages/Forecast").then((m) => ({ default: m.Forecast })));
 const Network = lazy(() => import("./pages/Network").then((m) => ({ default: m.Network })));
+const Optimizer = lazy(() => import("./pages/Optimizer").then((m) => ({ default: m.Optimizer })));
+const DataHealth = lazy(() => import("./pages/DataHealth").then((m) => ({ default: m.DataHealth })));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 30_000 } },
@@ -42,6 +47,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="forecast" element={<Suspense fallback={<Loading />}><Forecast /></Suspense>} />
               <Route path="network" element={<Suspense fallback={<Loading />}><Network /></Suspense>} />
               <Route path="impact" element={<Impact />} />
+              <Route path="optimizer" element={<Suspense fallback={<Loading />}><Optimizer /></Suspense>} />
+              <Route path="risk" element={<Risk />} />
+              <Route path="drill" element={<Drill />} />
+              <Route path="benchmark" element={<Benchmark />} />
+              <Route path="data-health" element={<Suspense fallback={<Loading />}><DataHealth /></Suspense>} />
               <Route path="export" element={<Export />} />
               <Route path="checks" element={<Checks />} />
               <Route path="planned" element={<Planned />} />

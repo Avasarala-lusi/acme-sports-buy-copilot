@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from engine import forecast, impact, pull_forward
+from engine import benchmark, data_health, drill, forecast, impact, pull_forward, risk
 from engine.calendar import window_label
 from engine.accounting import accounting_report, rule_violations
 from engine.metrics import baseline_evaluation, comparison_table
@@ -139,8 +139,8 @@ def data_issues():
 
 @app.get("/features")
 def features():
-    return {"forecast": True, "risk": False, "optimizer": False, "drill": False,
-            "benchmark": False, "ask": False, "data_health": False}
+    return {"forecast": True, "risk": True, "optimizer": True, "drill": True,
+            "benchmark": True, "ask": False, "data_health": True}
 
 
 def _checks():
@@ -459,6 +459,76 @@ def _impact(price: float):
 def impact_view(price: float = Query(21.0, ge=1, le=1000)):
     """Late and undelivered firm demand, plan vs baseline, by market, product line, channel and customer."""
     return _impact(round(price, 2))
+
+
+# ------------------------------------------------------------------ extensions
+@lru_cache(maxsize=128)
+def _risk(run_id: str | None):
+    return _json(risk.risk_report(automatic_planner(), run_id))
+
+
+@app.get("/risk")
+def risk_view(run_id: str | None = None):
+    """On-time probability of the bought plan (or one buying run) under lead-time variation."""
+    if run_id is not None:
+        _check_run(run_id)
+    return _risk(run_id)
+
+
+_network_lock = threading.Lock()
+
+
+@lru_cache
+def _network_results():
+    return benchmark.cached_network_results(automatic_planner())
+
+
+@app.get("/network-plans")
+def network_plans():
+    """Cost/service frontier and planner benchmark (one optimiser solve per weight; a few minutes the first time)."""
+    with _network_lock:
+        return _network_results()
+
+
+@lru_cache
+def _network_model():
+    from engine.optimizer import Network
+    return Network(automatic_planner())
+
+
+class Drill(BaseModel):
+    factory: str
+    start: str
+    end: str
+    weight: float = 0.5
+
+
+@lru_cache(maxsize=16)
+def _drill(factory: str, start: str, end: str, weight: float):
+    with _network_lock:
+        return _json(drill.run_drill(automatic_planner(), factory, start, end, weight, _network_model()))
+
+
+@app.post("/drill")
+def drill_view(d: Drill):
+    """Close a factory for a period; compare the rule engine's and the optimiser's response (about a minute)."""
+    try:
+        return _drill(d.factory, d.start, d.end, round(min(max(d.weight, 0.0), 1.0), 2))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@lru_cache(maxsize=128)
+def _health(run_id: str | None):
+    return _json(data_health.health_report(automatic_planner(), run_id))
+
+
+@app.get("/data-health")
+def data_health_view(run_id: str | None = None):
+    """Unusual records in each run's data load, before they affect the plan."""
+    if run_id is not None:
+        _check_run(run_id)
+    return _health(run_id)
 
 
 @app.get("/export/{run_id}")

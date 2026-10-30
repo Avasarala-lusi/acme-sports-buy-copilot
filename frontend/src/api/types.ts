@@ -398,3 +398,68 @@ export interface Seasonality {
   stage_mean_units: Record<string, number>;
   stage_ratio_max_min: number;
 }
+
+// ---------------------------------------------------------------- extensions
+export interface RiskLot {
+  lot_id: string; run_id: string; buying_window: string; article_id: string; market_destination: string;
+  assigned_factory: string; consolidated_qty: number; on_time: boolean; on_time_units: number; nsv_usd: number;
+  suggested_rdd: string; earliest_rdd: string; units: number; expected_on_time_units: number;
+  nsv_at_risk_usd: number; min_slack_days: number; p_on_time: number;
+}
+export interface Risk {
+  run_id: string | null; lots: number; units: number; planned_on_time_pct: number; expected_on_time_pct: number;
+  expected_on_time_units: number; nsv_usd: number; nsv_at_risk_usd: number; value_weighted_on_time_pct: number;
+  planned_on_time_but_at_risk_lots: number; assumption: { early_share_of_range: number; late_share_of_range: number };
+  bands: { band: string; lots: number; units: number }[];
+  by_factory: { assigned_factory: string; units: number; nsv_at_risk_usd: number; planned_on_time_pct: number; expected_on_time_pct: number }[];
+  factories: { factory_id: string; delay_p10_days: number; delay_p50_days: number; delay_p90_days: number }[];
+  riskiest: RiskLot[];
+}
+export interface PlanKpis {
+  firm_units: number; units_bought: number; units_not_bought: number; bought_pct: number;
+  production_cost_usd: number; cost_per_unit_usd: number; on_time_units: number; on_time_pct_of_bought: number;
+  on_time_pct_of_firm: number; expected_on_time_units: number; expected_on_time_pct_of_bought: number;
+  backup_units_pct: number; peak_utilization_pct: number; weeks_over_100: number; units_in_closed_weeks: number;
+  orders_below_mpq: number | null;
+}
+export interface FactoryMix { factory_id: string; units: number; production_cost_usd: number; on_time_pct: number }
+export interface PlanChange {
+  lot_id: string; run_id: string; article_id: string; market_destination: string; qty: number;
+  rule_factory: string | null; plan_factory: string | null; rule_on_time_units: number; plan_on_time_units: number;
+  cost_change_usd: number;
+}
+export interface Approach {
+  key: string; label: string; kind: "baseline" | "rules" | "optimiser"; weight?: number; status?: string;
+  gap_pct?: number; seconds?: number; results: Record<string, PlanKpis>;
+}
+export interface NetworkPlans {
+  seasons: string[]; tuning_seasons: string[]; test_seasons: string[]; weights: number[]; selected_weight: number;
+  selection_rule: string; approaches: Approach[];
+  selection_steps: { from: number; to: number; extra_on_time_units: number; extra_cost_usd: number;
+    cost_per_extra_on_time_unit_usd: number; average_unit_cost_usd: number; accepted: boolean }[];
+  plans: { weight: number; by_factory: FactoryMix[]; changes: PlanChange[] }[];
+  universe: { lots: number; requisitions: number; units: number; from_review_lots: number };
+}
+type DrillKey = "rules" | "rules_disrupted" | "optimiser" | "optimiser_disrupted";
+export interface DrillResult {
+  factory: string; start: string; end: string; weight: number; weeks_closed: number;
+  affected_lots: number; affected_units: number;
+  plans: Record<DrillKey, PlanKpis>;
+  by_factory: Record<DrillKey, FactoryMix[]>;
+}
+export type Severity = "error" | "warning" | "info";
+export interface HealthFlag {
+  pr_id: string; run_id: string; article_id: string; market_destination: string; customer_id: string;
+  requested_qty: number; check: string; severity: Severity; detail: string;
+}
+export interface HealthRun {
+  run_id: string; week_number: number; season: string; records: number; units: number; stage: string;
+  expected_units: number | null; expected_basis: string; volume_change_pct: number | null; volume_flag: boolean;
+  flagged_records: number; errors: number; warnings: number; info: number; flagged_pct: number;
+}
+export interface DataHealth {
+  records: number; flagged_records: number; flagged_pct: number; runs_with_volume_flag: number;
+  checks: { check: string; severity: Severity; description: string; records: number; share_pct: number }[];
+  runs: HealthRun[]; load_findings: string[];
+  run?: HealthRun & { by_check: Record<string, number>; flags: HealthFlag[] };
+}

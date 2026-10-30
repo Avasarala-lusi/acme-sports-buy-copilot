@@ -145,7 +145,8 @@ class Planner:
 
     def reset(self) -> None:
         cap = self.factories["weekly_capacity_units"].to_dict()
-        self.ledger = CapacityLedger(cap, self.cfg["capacity"]["spread_over_manufacturing"])
+        self.ledger = CapacityLedger(cap, self.cfg["capacity"]["spread_over_manufacturing"],
+                                     closures=self.cfg.get("disruption", {}).get("closures"))
         self.open: dict[str, str] = {}          # pr_id -> latest wait reason
         self.pr_notes: dict[str, list[str]] = {}  # Rule 5 exceptions recorded on arrival
         self.outcomes: dict[str, dict] = {}
@@ -207,14 +208,21 @@ class Planner:
             count += 1
         return cursor <= original and count <= self.cfg["buying_window"].get("max_pull_forward_windows", 4)
 
+    def mpq_band_ok(self, ids):
+        """MPQ group test. `rdd_band`: one 15-day RDD span. `purchase`: everything bought for the article at the
+        factory in this window, i.e. one production order, whatever the RDD spread."""
+        if self.cfg["quantities"].get("mpq_scope", "rdd_band") == "purchase":
+            return True
+        return self.rdd_span_ok(ids)
+
     def mpq_groups(self, lots):
-        """Same article/factory and anchored 15-day span, across market lots."""
+        """Same article/factory and anchored 15-day span (or the whole window), across market lots."""
         groups = {}
         for lot in sorted(lots, key=lambda x: x["earliest_rdd"]):
             key = (lot["article_id"], lot["assigned_factory"])
             bands = groups.setdefault(key, [])
             ids = lot["pr_ids"].split(",")
-            if bands and self.rdd_span_ok([p for x in bands[-1] for p in x["pr_ids"].split(",")] + ids):
+            if bands and self.mpq_band_ok([p for x in bands[-1] for p in x["pr_ids"].split(",")] + ids):
                 bands[-1].append(lot)
             else:
                 bands.append([lot])
@@ -525,6 +533,21 @@ class Planner:
                         f"arrives {arrival:%Y-%m-%d}{' on time' if arrival <= rdd else ' late'}, ${cost:,.0f}"))
         return [text for _, _, text in sorted(out)]
 
+    def _fill_lots(self, glots, c, shortfall):
+        """Top-ups for a production order: each joins a market lot of its market without breaking that lot's
+        15-day span. Returns (requisition, lot) pairs, or nothing if the shortfall cannot be covered."""
+        trial, pairs, added = {id(l): list(l.pr_ids) for l in glots}, [], 0.0
+        for p, qty in zip(c["pr_id"], c["requested_qty"]):
+            if added >= shortfall:
+                break
+            lot = next((l for l in glots if l.market == self.rows[p]["market_destination"]
+                        and self.rdd_span_ok(trial[id(l)] + [p])), None)
+            if lot is not None:
+                trial[id(lot)].append(p)
+                pairs.append((p, lot))
+                added += qty
+        return pairs if added >= shortfall else []
+
     def _check_mpq(self, placed, lots, candidates, used_future, run_id, next_buy, tol):
         """MPQ per article per factory for the window. Lots sent to planner review are not produced
         and do not count towards a factory's total."""
@@ -540,7 +563,7 @@ class Planner:
         for (article, factory), members in groups.items():
             bands = []
             for lot in sorted(members, key=lambda l: self._min_rdd(l.pr_ids)):
-                if bands and self.rdd_span_ok([p for l in bands[-1] for p in l.pr_ids] + lot.pr_ids):
+                if bands and self.mpq_band_ok([p for l in bands[-1] for p in l.pr_ids] + lot.pr_ids):
                     bands[-1].append(lot)
                 else:
                     bands.append([lot])
@@ -553,11 +576,15 @@ class Planner:
             if status == PIGGYBACK:
                 markets = sorted({l.market for l in glots})
                 base_ids = [p for l in glots for p in l.pr_ids]
-                c = candidates(article, markets, base_ids)
-                picked = pick_to_fill(mpq - total, list(zip(c["pr_id"], c["requested_qty"])))
-                if picked and self.rdd_span_ok(base_ids + picked):
-                    for p in picked:
-                        target = next(l for l in glots if l.market == self.rows[p]["market_destination"])
+                if self.cfg["quantities"].get("mpq_scope", "rdd_band") == "purchase":
+                    pairs = self._fill_lots(glots, candidates(article, markets), mpq - total)
+                else:
+                    c = candidates(article, markets, base_ids)
+                    picked = pick_to_fill(mpq - total, list(zip(c["pr_id"], c["requested_qty"])))
+                    pairs = [(p, next(l for l in glots if l.market == self.rows[p]["market_destination"]))
+                             for p in picked] if picked and self.rdd_span_ok(base_ids + picked) else []
+                if pairs:
+                    for p, target in pairs:
                         self._apply_piggyback(target, [p], used_future,
                                               f"Rule 4: {factory} total {total:.0f} was within {tol}% of MPQ {mpq}")
                     keep.extend(glots)

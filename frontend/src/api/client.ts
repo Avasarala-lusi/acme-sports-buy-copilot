@@ -1,7 +1,7 @@
 import type {
   Checks, Customer, DelayResult, LotDecision, Factory, Features, HoldResult, LotRequisition, Overrides, Plan,
   PullForward, CapacityRow, Requisition, Run, Settings, SwapResult, TrendPoint, Network,
-  ForecastView, Backtest, Impact, Seasonality,
+  ForecastView, Backtest, Impact, Seasonality, Risk, NetworkPlans, DrillResult, DataHealth,
 } from "./types";
 
 // Dev uses the Vite proxy (/api -> :8000). The built app is served by the API itself (same origin).
@@ -44,6 +44,11 @@ export const api = {
   seasonality: () => request<Seasonality>("/forecast-seasonality"),
   impact: (price: number) => request<Impact>(`/impact?price=${price}`),
   features: () => request<Features>("/features"),
+  risk: (run?: string) => request<Risk>(run ? `/risk?run_id=${run}` : "/risk"),
+  networkPlans: () => request<NetworkPlans>("/network-plans"),
+  drill: (factory: string, start: string, end: string, weight: number) =>
+    request<DrillResult>("/drill", { method: "POST", ...body({ factory, start, end, weight }) }),
+  dataHealth: (run?: string) => request<DataHealth>(run ? `/data-health?run_id=${run}` : "/data-health"),
   pullForward: (run: string) => request<PullForward>(`/pull-forward/${run}`),
   acceptPull: (run: string, pr_ids: string[], target_run_id: string) =>
     request<{scheduled_for: string}>(`/pull-forward/${run}/accept`, {method: "POST", ...body({pr_ids, target_run_id})}),

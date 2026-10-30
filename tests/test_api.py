@@ -117,3 +117,13 @@ def test_forecast_endpoint(client):
 def test_impact_endpoint(client):
     r = client.get("/impact?price=21").json()
     assert r["price_per_unit_usd"] == 21 and r["by_market"] and r["top_customers"]
+
+
+def test_extension_endpoints(client):
+    f = client.get("/features").json()
+    assert all(f[k] for k in ["risk", "optimizer", "drill", "benchmark", "data_health"]) and f["ask"] is False
+    risk = client.get(f"/risk?run_id={RUN}").json()
+    assert risk["run_id"] == RUN
+    health = client.get(f"/data-health?run_id={RUN}").json()
+    assert health["run"]["run_id"] == RUN and health["checks"]
+    assert client.get("/risk?run_id=NOPE").status_code == 404

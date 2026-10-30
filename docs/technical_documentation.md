@@ -254,6 +254,56 @@ reach production about three months later. The forecast estimates that unseen de
 - **Limits**: before a full year of history (about week 53) some future stages have no earlier season; the forecast
   then falls back to the recent level, and the app says so.
 
+## 8c. Extensions: optimiser, on-time risk, disruption drill, benchmark, data health
+
+**On-time probability (`engine/risk.py`, On-time risk page).** Planned lead times are what the requisition (or the
+factory midpoint) quotes. The realised lead time is the plan plus a delay drawn from a triangular distribution sized by
+the factory's published min-max range: up to 25% of the range early, up to 50% late, for manufacturing and for transit
+(`risk` in the config, an assumption to confirm). One delay is drawn per lot. The chance a requisition arrives on time
+is the factory's delay distribution evaluated at its planned slack (RDD minus planned arrival). On the current plan,
+75% of bought units are planned on time but 59% are expected on time: most lots are planned to arrive on, or a day or
+two before, their requested date, with no buffer.
+
+**Network optimiser (`engine/optimizer.py`, Cost vs service page).** A mixed-integer programme (SciPy / HiGHS) over the
+rule plan's lots: the bought lots plus the review lots, each requisition once, in the first window it was due (6,806
+lots, 10.2M units). Firm demand that never formed a lot (last-chance requests in conflict with unconfirmed wholesale
+demand, and retried demand whose release had long passed, 1.96M units) stays with the planner. For each lot it picks one
+certified factory or "not bought", for all windows together:
+- every factory-week at or below 100%, with the rule engine's business-day spread over the production weeks,
+- MPQ per production order (article, factory, buying window), last-chance lots exempt,
+- objective `(1 - w) x cost + w x units expected late`, plus a large penalty per unit not bought and a small one per
+  unit at a backup factory (a backup must save more than 10% of the unit cost, or deliver more on time).
+`w = 0` is the cheapest plan, `w = 1` the safest. Solves stop after 20 seconds, within 1% of the best possible plan.
+
+| Plan (all seasons) | Units bought | On time (of 10.2M) | Bought units on time | Cost per unit | Backup units |
+|---|---|---|---|---|---|
+| Rule engine | 6.48M | 47.7% | 75.1% | $89.55 | 12% |
+| Optimiser, cheapest (w = 0) | 7.50M | 54.3% | 73.9% | $74.56 | 33% |
+| Optimiser, recommended (w = 0.5) | 7.54M | 63.7% | 86.2% | $77.56 | 44% |
+| Optimiser, safest (w = 1) | 7.53M | 66.2% | 89.8% | $89.08 | 52% |
+
+The gains come from planning all six factories together: lots that do not fit their primary go to whichever certified
+factory has room (not only the next in the backup chain), and cheaper factories (BD02 0.82, IN06 0.88) are used where
+they still deliver on time. The price is more backup production; the backup penalty is configurable.
+
+**Planner benchmark (`engine/benchmark.py`, Benchmark page).** Today's assignments, the rule engine and the optimiser
+at five weights, season by season on the same lots. The recommended weight is chosen on FW25 and SS26 only: raise the
+service weight while each extra on-time unit costs less than the average cost of making a unit (0.25 → 0.5: $38;
+0.5 → 0.75: $170, so 0.5). FW26 and SS27 are reported as unseen seasons. Results are cached in
+`outputs/network_<hash>.json`.
+
+**Disruption drill (`engine/drill.py`, Disruption drill page).** Closes one factory for a period (known from the start
+of planning). The rule engine re-plans every window with that factory's capacity removed in those weeks
+(`CapacityLedger.closures`); the optimiser re-plans the same lots with those factory-weeks at zero. Example, VN01 closed
+September-October 2026: the rule engine buys 216k fewer units, the optimiser 27k fewer.
+
+**Data health (`engine/data_health.py`, Data health page).** Per requisition: unknown article or customer, uncertified
+factory, duplicates (errors); lead times outside the factory range, quantity outliers for the article (robust z > 5),
+RDD unreachable with the requisition's own lead times (warnings); backup flag inconsistent with the assignment, RDD far
+out, order value outliers (information). Per run: volume against earlier runs at the same season stage (a plain trailing
+average would flag every season change), flagged beyond ±60%. On the current data: 2.8% of records flagged (quantity
+outliers and unreachable RDDs), and 23% carry a backup flag while staying at their primary factory.
+
 ## 9. Validation (agreed success criteria)
 
 | Check | Result |
