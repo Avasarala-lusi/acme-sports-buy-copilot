@@ -8,7 +8,7 @@ const labels: Record<string, string> = {
   every_pr_has_one_outcome: "Every requisition has exactly one outcome",
   no_pr_in_two_lots: "No requisition appears in two lots",
   bought_prs_match_lots: "Bought requisitions match the bought lots",
-  review_prs_visible: "Requests needing review remain traceable",
+  review_prs_visible: "Outstanding exceptions have current review rows",
   purchases_only_in_buying_windows: "Purchases are committed only in MID/EOM buying runs",
   no_overload: "Every factory production week respects the hard ceiling",
   units_add_up: "Units add up across all outcomes",

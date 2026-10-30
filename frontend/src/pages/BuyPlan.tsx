@@ -172,7 +172,8 @@ export function BuyPlan() {
       (!factory || l.assigned_factory === factory) &&
       (!onlyWarnings || l.warnings) &&
       (!onlyManual || l.decision_type === "manual") &&
-      (!needle || l.article_id.toLowerCase().includes(needle) || l.lot_id.toLowerCase().includes(needle)));
+      (!needle || l.article_id.toLowerCase().includes(needle) || l.lot_id.toLowerCase().includes(needle)
+        || l.pr_ids.toLowerCase().includes(needle)));
   }, [plan.data, view, q, market, factory, onlyWarnings, onlyManual]);
 
   if (plan.isLoading) return <Loading label="Loading the buy plan…" />;
@@ -225,14 +226,15 @@ export function BuyPlan() {
           {view === "review" && (
             <div className="mb-3 flex items-start gap-2 rounded-2xl border border-warn/25 bg-warn-soft p-3 text-sm text-warn">
               <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-              These lots fail a capacity or quantity check. Review the specific warning, try another certified factory,
-              delay, or cancel. Choosing Buy still rechecks all constraints and never bypasses the hard capacity ceiling.
+              These requests are still awaiting a decision, including outstanding requests from earlier windows.
+              Review the warning, try another certified factory, delay, or cancel. They reserve no capacity until
+              purchased. Choosing Buy rechecks eligibility, quantities and the hard capacity ceiling.
             </div>
           )}
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search article or lot" className={cx(field, "w-60 pl-8")} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search PR, article or lot" className={cx(field, "w-60 pl-8")} />
             </div>
             <select value={market} onChange={(e) => setMarket(e.target.value)} className={field}>
               <option value="">All markets</option>
