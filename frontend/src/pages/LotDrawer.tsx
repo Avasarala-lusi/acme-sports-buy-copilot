@@ -6,6 +6,7 @@ import type { Decision, Lot, LotDecision } from "../api/types";
 import { Drawer } from "../components/Drawer";
 import { Badge, Button, LoadBar, Loading, Segmented, Select, Stat, Tabs, cx } from "../components/ui";
 import { DataTable } from "../components/DataTable";
+import { ForecastWarning } from "../components/ForecastWarning";
 import { date, int, load, money, splitList } from "../lib/format";
 
 const ruleIcon = (text: string) => {
@@ -172,6 +173,7 @@ export function LotDrawer({ lot, runId, draft, onClose }: { lot: Lot | null; run
       )}
       {tab === "decision" && !draft && (
         <div className="space-y-4">
+          {lot.consolidated_qty > 0 && <ForecastWarning runId={runId} lotId={lot.lot_id} factory={factory || lot.assigned_factory} />}
           <p className="text-sm text-muted">
             Decisions are saved separately from the automatic plan and marked as manual. Exports use the decided plan.
           </p>

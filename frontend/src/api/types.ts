@@ -92,7 +92,7 @@ export interface Plan {
   manual_changes: number;
   decision_issues: string[];
   counts: { unresolved: number; future: number; review: number; waiting: number };
-  units: { bought: number; review: number; unresolved: number; future: number; waiting: number };
+  units: { bought: number; review: number; unresolved: number; future: number; waiting: number; cancelled: number };
   lots: Lot[];
 }
 
@@ -319,13 +319,15 @@ export interface Network {
 }
 
 export interface ForecastView {
+  basis: string;
   run_id: string;
   origin_week: number;
   model: string;
   horizon_weeks: number;
   stage_coverage_pct: number;
   history: { factory: string; week: number; date: string; units: number }[];
-  intake: { factory: string; week: number; date: string; horizon: number; p10: number; p50: number; p90: number; actual: number | null }[];
+  intake: { factory: string; week: number; date: string; horizon: number; p10: number; p50: number; p90: number; actual: number | null;
+    used_model: string; fallback_reason: string; range_source: string; calibration_samples: number; fit_warning?: string }[];
   load: {
     factory_id: string; week: string; capacity: number; committed_units: number; known_open_units: number;
     forecast_units: number; known_pct: number; forecast_pct: number; forecast_p90_pct: number;
@@ -334,13 +336,27 @@ export interface ForecastView {
 }
 
 export interface Backtest {
+  selected_model: string | null;
+  holdout_first_week: number;
+  holdout_last_week: number;
+  evaluation_note: string;
+  holdout_overall: { model: string; wape_pct: number; complete: boolean; fallback_pct: number }[];
+  failures: { model: string; origin: number; period: string; error: string }[];
   default_model: string;
-  coverage_pct: number;
+  coverage_pct: number | null;
   origins: number;
   horizon_weeks: number;
-  overall: { model: string; wape_pct: number }[];
+  overall: { model: string; wape_pct: number; complete: boolean; fallback_pct: number }[];
   by_horizon: { model: string; band: string; wape_pct: number }[];
   network_by_horizon: { horizon: number; wape_pct: number }[];
+}
+
+export interface ForecastDecision {
+  run_id: string; lot_id: string; factory_id: string; model: string; basis: string;
+  committed_before_pct: number; committed_after_pct: number;
+  hard_capacity_blocked: boolean; forecast_warning: boolean; threshold_pct: number;
+  weeks: { week: string; committed_after_pct: number; known_after_pct: number;
+    forecast_after_pct: number; forecast_p90_pct: number }[];
 }
 
 export interface ImpactRow {
@@ -369,6 +385,7 @@ export interface Impact {
   network_weekly_capacity: number;
   firm_requisitions: number;
   firm_units: number;
+  unconfirmed_conflict_units: number;
   plan: Record<string, ImpactStatus>;
   baseline: Record<string, ImpactStatus>;
   plan_median_days_late: number;
@@ -383,6 +400,8 @@ export interface Impact {
   by_channel: ImpactRow[];
   by_segment: ImpactRow[];
   top_customers: ImpactRow[];
+  by_factory: ImpactRow[];
+  by_article: ImpactRow[];
 }
 
 export interface Seasonality {

@@ -39,7 +39,7 @@ export function Capacity() {
   return (
     <>
       <PageHeader eyebrow="Rolling capacity ledger" title="Capacity"
-        subtitle={`Weekly load per factory from our own assignments around the selected week, including this week's lots (a preview in a draft week). Only last-chance lots can take a factory past its ${limit}% limit.`} />
+        subtitle={`Weekly load from our assignments, including this week's lots (a preview in a draft week). Every purchase, including last-chance demand, must stay within ${limit}%.`} />
       <Card className="p-5">
         <div className="h-[480px]">
           <ResponsiveContainer>

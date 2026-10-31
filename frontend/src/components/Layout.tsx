@@ -78,6 +78,9 @@ function ThemeToggle() {
 export function Layout() {
   const { runs, run, runId, setRunId } = useRun();
   const qc = useQueryClient();
+  const { data: featureFlags } = useQuery({ queryKey: ["features"], queryFn: api.features, staleTime: Infinity });
+  const experimentalOn = !!featureFlags?.optimizer;
+  const visiblePage = (page: { to: string }) => experimentalOn || !["/optimizer", "/risk", "/drill", "/benchmark", "/data-health"].includes(page.to);
   const location = useLocation();
   const [palette, setPalette] = useState(false);
   const { data: plan } = useQuery({ queryKey: ["plan", runId], queryFn: () => api.plan(runId) });
@@ -97,6 +100,7 @@ export function Layout() {
   const idx = runs.findIndex((r) => r.run_id === runId);
   const step = (d: number) => { const r = runs[idx + d]; if (r) setRunId(r.run_id); };
   const nextBuying = runs.slice(idx + 1).find((r) => r.is_buying_run);
+  const purchaseRun = runs.find(r => r.run_id === plan?.buying_run_id) ?? run;
   const current = pages.find((p) => (p.to === "/" ? location.pathname === "/" : location.pathname.startsWith(p.to)));
   const page = current?.label ?? "";
   const pageHint = current ? hints[current.to] : "";
@@ -129,16 +133,16 @@ export function Layout() {
           {nav.slice(0, 2).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Capacity</div>
           {nav.slice(2, 7).map((n) => <NavItem key={n.to} {...n} />)}
-          <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Optimise</div>
-          {nav.slice(7, 11).map((n) => <NavItem key={n.to} {...n} />)}
+          {experimentalOn && <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Optimise</div>}
+          {nav.slice(7, 11).filter(visiblePage).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Deliver</div>
-          {nav.slice(11).map((n) => <NavItem key={n.to} {...n} />)}
+          {nav.slice(11).filter(visiblePage).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Labs</div>
           <NavLink to="/planned"
             className={({ isActive }) => cx("flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition",
               isActive ? "bg-sidebar font-medium text-ink" : "text-muted hover:bg-sidebar/60 hover:text-ink")}>
             <Sparkles size={15} className="text-faint" /> Capabilities
-            <span className="ml-auto rounded bg-manual-soft px-1.5 font-mono text-[10px] text-manual">1 soon</span>
+            <span className="ml-auto rounded bg-manual-soft px-1.5 font-mono text-[10px] text-manual">upcoming</span>
           </NavLink>
         </nav>
 
@@ -159,9 +163,9 @@ export function Layout() {
             <dl className="space-y-1 text-xs">
               {[
                 ["Freeze", run.mrp_freeze_datetime_utc],
-                ["Go / No-Go", run.go_nogo_date],
-                ["PO execution", run.po_execution_date],
-                ["Factory confirms", run.factory_confirm_deadline],
+                ["Go / No-Go", purchaseRun?.go_nogo_date ?? run.go_nogo_date],
+                ["Formal PO", plan?.buy_date ?? run.po_execution_date],
+                ["Factory confirms", purchaseRun?.factory_confirm_deadline ?? run.factory_confirm_deadline],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-2">
                   <dt className="text-muted">{k}</dt>
@@ -169,6 +173,7 @@ export function Layout() {
                 </div>
               ))}
             </dl>
+            {!run.is_buying_run && plan && <p className="mt-2 text-[10px] text-faint">Freeze is this planning run; other dates refer to its next formal buying window.</p>}
             {nextBuying && (
               <button onClick={() => setRunId(nextBuying.run_id)}
                 className="mt-2.5 w-full rounded-lg border border-line py-1 text-xs text-muted hover:border-accent/40 hover:text-accent">
@@ -223,7 +228,7 @@ export function Layout() {
           </div>
         </main>
       </div>
-      <CommandPalette open={palette} onClose={() => setPalette(false)} pages={pages} />
+      <CommandPalette open={palette} onClose={() => setPalette(false)} pages={pages.filter(visiblePage)} />
     </div>
   );
 }

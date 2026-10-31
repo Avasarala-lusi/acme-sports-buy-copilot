@@ -23,7 +23,7 @@ export function Planned() {
   const features = useQuery({ queryKey: ["features"], queryFn: api.features, staleTime: Infinity });
   return (
     <>
-      <PageHeader eyebrow="Roadmap" title="Capabilities" subtitle="Extensions to the rule engine. Open any available one; the rest are in development." />
+      <PageHeader eyebrow="Upcoming work" title="Capabilities" subtitle="This release focuses on the core Buy Plan workflow and forecasting. Other capabilities remain prototypes for later weeks and are not part of the current validated release." />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map(({ key, icon: Icon, title, text }) => {
           const on = features.data?.[key] ?? false;

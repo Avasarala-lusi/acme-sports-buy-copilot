@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Area, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis,
+  Area, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { AlertTriangle, Gauge, Target, TrendingUp } from "lucide-react";
 import { api } from "../api/client";
@@ -23,8 +23,9 @@ const day = (iso: string) => iso.slice(0, 10);
 
 export function Forecast() {
   const { runId } = useRun();
+  const [model, setModel] = useState("");
   const [factory, setFactory] = useState<string>("ALL");
-  const fc = useQuery({ queryKey: ["forecast", runId], queryFn: () => api.forecast(runId) });
+  const fc = useQuery({ queryKey: ["forecast", runId, model], queryFn: () => api.forecast(runId, model || undefined) });
   const bt = useQuery({ queryKey: ["backtest"], queryFn: api.backtest, staleTime: Infinity });
   const seas = useQuery({ queryKey: ["seasonality"], queryFn: api.seasonality, staleTime: Infinity });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, staleTime: Infinity });
@@ -73,7 +74,7 @@ export function Forecast() {
   const warnings = f.windows.filter((w) => w.early_warning);
   const windows = [...new Set(f.windows.map((w) => w.window))];
   const overall = bt.data?.overall ?? [];
-  const best = overall[0];
+  const best = overall.find(x => x.model === bt.data?.selected_model);
   const baseline = overall.find((o) => o.model === "seasonal_naive");
   const loadFactory = factory === "ALL" ? "ACME-CN04" : factory;
   const tooltip = { contentStyle: { background: panel, border: `1px solid ${line}`, borderRadius: 12, fontSize: 12, color: ink }, labelStyle: { color: ink, fontWeight: 600 } };
@@ -81,18 +82,27 @@ export function Forecast() {
   return (
     <>
       <PageHeader eyebrow={`Forecast · ${MODEL_NAMES[f.model] ?? f.model} model · weeks up to ${f.origin_week}`} title="Demand & load forecast"
-        subtitle={`Requisitions keep arriving every week and reach production about three months later, so the next four buying windows will carry load that is not in the data yet. This forecasts that demand ${f.horizon_weeks} weeks ahead, using only weeks up to ${runId}, and adds it to the factories' load.`} />
+        subtitle={`Estimates demand for the next ${f.horizon_weeks} weeks using history available at ${runId}, then projects factory pressure over four buying windows (about eight weeks). Forecast demand is not a purchase or a capacity reservation. Saved planner decisions are included.`} />
+      <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+        <label>Forecast method <select className="ml-2 rounded border border-line bg-panel p-2" value={model || f.model} onChange={e => setModel(e.target.value)}>
+          {Object.entries(MODEL_NAMES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select></label>
+        <span className="text-xs text-faint">Method preview only. Purchase-decision warnings use the configured default method.</span>
+      </div>
 
       {f.stage_coverage_pct < 100 && (
         <div className="mb-4 flex items-start gap-2 rounded-2xl border border-warn/25 bg-warn-soft p-3 text-sm text-warn">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           <span>
             Only {f.stage_coverage_pct.toFixed(0)}% of these forecast weeks have an earlier season of the same buying stage in the data
-            up to {runId}. For the rest the forecast falls back to the recent level, so expect it to miss the next season change;
-            it becomes reliable once a full year of history is available (from about week 53).
+            up to {runId}. For the rest the forecast falls back to the recent level, so future peaks may be missed.
+            More history may help, but reliability must be judged from historical tests rather than a fixed week number.
           </span>
         </div>
       )}
+      {f.intake.some(x => x.fallback_reason) && <p className="mb-4 rounded border border-warn/30 p-3 text-sm text-warn">Some predictions use a simpler fallback: {[...new Set(f.intake.map(x => x.fallback_reason).filter(Boolean))].join("; ")}</p>}
+      {f.intake.some(x => x.fit_warning) && <details className="mb-4 text-sm text-warn"><summary>Model fit warnings: interpret this preview cautiously</summary><p>{[...new Set(f.intake.map(x => x.fit_warning).filter(Boolean))].join("; ")}</p></details>}
+      {f.intake.some(x => x.calibration_samples < 30) && <p className="mb-4 text-sm text-muted">Some uncertainty ranges use an assumed 60–140% span because there are too few past forecast errors. They are not validated probability guarantees.</p>}
       <div className="mb-4 flex flex-wrap gap-1.5">
         {["ALL", ...FACTORIES].map((x) => (
           <button key={x} onClick={() => setFactory(x)}
@@ -105,13 +115,13 @@ export function Forecast() {
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={TrendingUp} label={`Demand still to arrive · next ${f.horizon_weeks} weeks`} value={int(next.p50)}
-          sub={`P10–P90: ${int(next.p10)} – ${int(next.p90)} units`} />
+          sub={`Summed lower–upper estimates: ${int(next.p10)} – ${int(next.p90)} units`} />
         <Kpi icon={AlertTriangle} label="Early warnings" value={String(warnings.length)}
           sub="Windows fine on known demand that cross 85% with the forecast" />
-        <Kpi icon={Target} label="Backtest error (WAPE)" value={best ? pct(best.wape_pct, 1) : "…"}
+        <Kpi icon={Target} label="Selection-period winner · WAPE" value={best ? pct(best.wape_pct, 1) : "…"}
           sub={baseline && best ? `${MODEL_NAMES[best.model]} · same week last year ${pct(baseline.wape_pct, 1)}` : "walk-forward, only past weeks"} />
-        <Kpi icon={Gauge} label="P10–P90 range calibration" value={bt.data ? pct(bt.data.coverage_pct, 0) : "…"}
-          sub="Share of actuals inside the 80% range (target 80%)" />
+        <Kpi icon={Gauge} label="Final-period range coverage" value={bt.data?.coverage_pct != null ? pct(bt.data.coverage_pct, 1) : "…"}
+          sub="Configured default: observed coverage of the nominal 80% range" />
       </div>
 
       <div className="mb-5 grid gap-4 xl:grid-cols-2">
@@ -125,14 +135,13 @@ export function Forecast() {
                 <YAxis tick={{ fontSize: 11, fill: axis }} tickLine={false} axisLine={false} width={56} tickFormatter={(v: number) => `${Math.round(v / 1000)}k`} />
                 <Tooltip {...tooltip} formatter={(v: number | number[], n: string) => [Array.isArray(v) ? `${int(v[0])} – ${int(v[1])}` : int(v), n]} />
                 <Legend wrapperStyle={{ fontSize: 12, color: ink }} />
-                <Area dataKey="band" name="P10–P90 range" stroke="none" fill={s1} fillOpacity={0.15} isAnimationActive={false} />
+                <Area dataKey="band" name={factory === "ALL" ? "Summed lower–upper estimates" : "Nominal P10–P90 range"} stroke="none" fill={s1} fillOpacity={0.15} isAnimationActive={false} />
                 <Line dataKey="history" name="Received" stroke={ink} strokeOpacity={0.75} strokeWidth={2} dot={false} isAnimationActive={false} />
                 <Line dataKey="p50" name="Forecast" stroke={s1} strokeWidth={2} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
-                <Scatter dataKey="actual" name="Actual (revealed later)" fill={axis} shape="circle" isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-          <p className="mt-2 text-xs text-faint">Grey dots are what actually arrived later in the data; they are shown for comparison and never used to forecast.</p>
+          <p className="mt-2 text-xs text-faint">Future actual demand is hidden in this operational view. Forecasts use only earlier demand and the assumed-known buying-stage calendar.</p>
         </Card>
 
         <Card className="p-5">
@@ -148,13 +157,14 @@ export function Forecast() {
                 <Area dataKey="committed" name="Committed" stackId="l" stroke={s1} fill={s1} fillOpacity={0.55} isAnimationActive={false} />
                 <Area dataKey="known" name="Known open demand" stackId="l" stroke={s2} fill={s2} fillOpacity={0.45} isAnimationActive={false} />
                 <Area dataKey="forecast" name="Forecast demand" stackId="l" stroke={s3} fill={s3} fillOpacity={0.35} isAnimationActive={false} />
-                <Line dataKey="p90" name="P90" stroke={s3} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
+                <Line dataKey="p90" name="Upper demand scenario" stroke={s3} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
                 <ReferenceLine y={threshold} stroke={warn} strokeDasharray="5 4" label={{ value: `${threshold}%`, fontSize: 11, fill: axis, position: "insideTopRight" }} />
                 <ReferenceLine y={limit} stroke={critical} strokeDasharray="2 3" label={{ value: `${limit}%`, fontSize: 11, fill: axis, position: "insideTopLeft" }} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-          <p className="mt-2 text-xs text-faint">Unconstrained: demand placed at its primary factory before any backup routing, so it shows where pressure will build.</p>
+          <p className="mt-2 text-xs text-faint">Saved commitments plus known-open and forecast pressure. Open/forecast demand is projected at primary factories before routing; values above 100% are warnings, not committed overloads.</p>
+          <p className="mt-1 text-xs text-faint">Summed lower/upper estimates are scenarios, not calibrated probabilities for total network load. Final-period range coverage is measured per factory and forecast week.</p>
         </Card>
       </div>
 
@@ -165,7 +175,7 @@ export function Forecast() {
             <div className="rounded-xl border border-line p-3">
               <div className="text-xs text-muted">Autocorrelation at 52 weeks</div>
               <div className="font-num mt-1 text-lg">{seas.data.acf_lag52.toFixed(2)} <span className="text-xs text-faint">vs bound {seas.data.acf_bound_95.toFixed(2)}</span></div>
-              <div className="text-[11px] text-faint">{seas.data.acf_lag52_significant ? "Significant: demand repeats yearly" : "Not significant"}</div>
+              <div className="text-[11px] text-faint">{seas.data.acf_lag52_significant ? "Suggests annual repetition; limited evidence" : "No clear annual signal"}</div>
             </div>
             <div className="rounded-xl border border-line p-3">
               <div className="text-xs text-muted">Demand differs by buying stage (Kruskal-Wallis)</div>
@@ -228,7 +238,7 @@ export function Forecast() {
               <thead className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-faint">
                 <tr><th className="px-4 py-2.5 text-left font-normal">Model</th>
                   {["1-4 weeks", "5-8 weeks", `9-${bt.data?.horizon_weeks ?? 17} weeks`].map((b) => <th key={b} className="px-3 py-2.5 text-right font-normal">{b}</th>)}
-                  <th className="px-4 py-2.5 text-right font-normal">All</th></tr>
+                  <th className="px-4 py-2.5 text-right font-normal">All</th><th className="px-3 py-2.5 text-right font-normal">Fallback</th></tr>
               </thead>
               <tbody>
                 {overall.map((o) => (
@@ -239,6 +249,7 @@ export function Forecast() {
                       return <td key={b} className="font-num px-3 py-2 text-right text-muted">{v ? `${v.wape_pct.toFixed(1)}%` : "—"}</td>;
                     })}
                     <td className="font-num px-4 py-2 text-right">{o.wape_pct.toFixed(1)}%</td>
+                    <td className="font-num px-3 py-2 text-right">{pct(o.fallback_pct, 0)}{!o.complete && " incomplete"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -247,8 +258,17 @@ export function Forecast() {
           <div className="border-t border-line px-5 py-2.5 text-xs text-faint">
             WAPE = absolute error ÷ actual demand, per factory and week (lower is better). The ML models learn a correction to the stage
             baseline; SARIMAX uses the stages as regressors (a 52-week seasonal ARIMA term needs two full years before each forecast).
-            The model with the lowest error is used; the others are re-tested as data grows.
+            The selection winner is a recommendation, not an automatic configuration change. Fallback rates are shown below. About 100 weeks provide fewer than two full annual cycles; these research results use the historical archive, not future information in the selected-run forecast.
           </div>
+          {bt.error && <div className="p-4"><ErrorBox error={bt.error} /></div>}
+          {seas.error && <div className="p-4 text-sm text-warn">Seasonality assessment unavailable: {seas.error.message}</div>}
+          {bt.data && <div className="border-t border-line p-4 text-sm">
+            <p className="mb-2">Final evaluation: weeks {bt.data.holdout_first_week}–{bt.data.holdout_last_week}, excluded from selection. Lower WAPE is better; a single final period remains limited evidence.</p>
+            <table className="w-full text-xs"><thead><tr className="text-left text-faint"><th>Model</th><th>Final WAPE</th><th>Fallback rows</th></tr></thead><tbody>
+              {bt.data.holdout_overall.map(row => <tr key={row.model} className="border-t border-line"><td className="py-1">{MODEL_NAMES[row.model]}{!row.complete && " (incomplete)"}</td><td>{pct(row.wape_pct, 1)}</td><td>{pct(row.fallback_pct, 0)}</td></tr>)}
+            </tbody></table>
+            {bt.data.failures.length > 0 && <p className="mt-2 text-warn">Some model fits could not run: {bt.data.failures.map(x => `${x.model}: ${x.error}`).join("; ")}</p>}
+          </div>}
         </Card>
       </div>
     </>

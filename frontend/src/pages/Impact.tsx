@@ -8,7 +8,7 @@ import { Badge, Card, ErrorBox, Kpi, Loading, PageHeader, SectionTitle, Segmente
 import { int, moneyShort, pct } from "../lib/format";
 
 const PRICES = ["19", "21", "22"] as const;
-type Dim = "by_market" | "by_product_line" | "by_category" | "by_channel" | "by_segment" | "top_customers";
+type Dim = "by_market" | "by_product_line" | "by_category" | "by_channel" | "by_segment" | "top_customers" | "by_factory" | "by_article";
 const DIMS: { value: Dim; label: string; key: string }[] = [
   { value: "by_market", label: "Market", key: "market" },
   { value: "by_product_line", label: "Product line", key: "product_line" },
@@ -16,11 +16,13 @@ const DIMS: { value: Dim; label: string; key: string }[] = [
   { value: "by_channel", label: "Channel", key: "channel" },
   { value: "by_segment", label: "Customer type", key: "segment" },
   { value: "top_customers", label: "Top customers", key: "customer" },
+  { value: "by_factory", label: "Factory", key: "factory" },
+  { value: "by_article", label: "Article", key: "article_id" },
 ];
 const STATES = [
   { key: "on time", label: "On time", color: "var(--color-status-good)" },
   { key: "late", label: "Late", color: "var(--color-status-warning)" },
-  { key: "not bought (planner)", label: "Not bought: no capacity, planner decides", color: "var(--color-status-critical)" },
+  { key: "not bought (planner)", label: "Not bought: planner decision needed", color: "var(--color-status-critical)" },
 ];
 
 function Split({ title, data }: { title: string; data: Record<string, ImpactStatus> }) {
@@ -63,17 +65,17 @@ export function Impact() {
 
   return (
     <>
-      <PageHeader eyebrow="Late-delivery impact · firm demand, plan vs baseline" title="Who is affected, and how much"
-        subtitle={`Every firm requisition (excluding wholesale forecasts without an order and demand still open at the end of the data), delivered on time, late, or not bought. Values at $${r.price_per_unit_usd}/unit, the client's average price.`}
+      <PageHeader eyebrow="Simulated planning impact · automatic plan vs baseline" title="Who is affected, and how much"
+        subtitle={`Historical automatic-plan comparison, not the current manual scenario or observed deliveries. Includes ${int(r.unconfirmed_conflict_units)} units of unconfirmed last-chance conflicts awaiting a decision. Dollar exposure uses an illustrative $${r.price_per_unit_usd}/unit.`}
         actions={<Segmented value={price} onChange={setPrice} options={PRICES.map((p) => ({ value: p, label: `$${p}/unit` }))} />} />
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={Clock} label="On time · baseline → plan"
           value={`${pct(r.baseline["on time"]?.share_pct ?? 0, 0)} → ${pct(r.plan["on time"]?.share_pct ?? 0, 0)}`}
-          sub={`of ${int(r.firm_units)} firm units`} />
+          sub={`of ${int(r.firm_units)} compared units; purchases only: ${pct((r.plan["on time"]?.units ?? 0) / Math.max(1, (r.plan["on time"]?.units ?? 0) + planLate) * 100, 1)}`} />
         <Kpi icon={AlertTriangle} label="Delivered late (plan)" value={int(planLate)}
-          sub={`median ${Math.round(r.plan_median_days_late)} days late; none over 60 days`} />
-        <Kpi icon={PackageX} label="Not bought (no capacity)" value={int(notBought)} sub="left with the planner to decide" />
+          sub={`median ${Math.round(r.plan_median_days_late)} days late in the simulated schedule`} />
+        <Kpi icon={PackageX} label="Not bought" value={int(notBought)} sub="capacity, minimums, timing or eligibility conflicts; planner decides" />
         <Kpi icon={CircleDollarSign} label={`Value not on time vs baseline · $${r.price_per_unit_usd}/unit`}
           value={moneyShort(r.extra_usd_at_price)} sub={`${moneyShort(r.extra_usd_range[0])} – ${moneyShort(r.extra_usd_range[1])} at $19–22`} />
       </div>
@@ -86,18 +88,18 @@ export function Impact() {
         <Card className="p-5">
           <div className="mb-2 flex items-center gap-2 text-[15px] font-semibold"><Factory size={16} className="text-accent" /> Why the baseline looks better</div>
           <p className="text-sm text-muted">
-            The baseline is on time only because it ignores capacity. To deliver it, the factories would have to make{" "}
+            The supplied baseline does not enforce our capacity checks. It places{" "}
             <span className="font-num text-ink">{int(r.baseline_units_above_capacity)}</span> units
-            ({pct(r.baseline_units_above_capacity_pct, 0)} of firm demand) beyond 100% of their capacity, in{" "}
+            ({pct(r.baseline_units_above_capacity_pct, 0)} of compared demand) beyond 100% of their capacity, in{" "}
             {r.baseline_weeks_over_capacity} factory-weeks, peaking at {pct(r.baseline_peak_utilization_pct, 0)}.
           </p>
           <p className="mt-2 text-sm text-muted">
-            Firm demand averages <span className="font-num text-ink">{int(r.firm_units_per_week)}</span> units a week against a network
+            Compared demand averages <span className="font-num text-ink">{int(r.firm_units_per_week)}</span> units a week against a network
             capacity of <span className="font-num text-ink">{int(r.network_weekly_capacity)}</span>. Our plan never exceeds 100%, so the
-            units that do not fit ({int(notBought)}) are surfaced for a planner decision instead.
+            unpurchased units ({int(notBought)}) need review. Capacity, timing, minimums and eligibility all contribute; capacity is not the sole cause of the timing gap.
           </p>
           <p className="mt-3 rounded-lg bg-sidebar p-2.5 text-xs text-faint">
-            Footnote: $ values use the client's average of ${r.price_per_unit_usd} per unit (range $19–22). The actual sales orders in the
+            Footnote: ${r.price_per_unit_usd}/unit is Roberto’s illustrative assumption (sensitivity $19–22), not an actual penalty or profit loss. Unbought demand is separate from late purchases. Factory breakdown uses the assigned factory for purchases and intended primary for unbought demand. The sales orders in the
             data average {moneyShort(r.order_value_per_unit_usd)} per unit, so order-value figures are about{" "}
             {Math.round(r.order_value_per_unit_usd / r.price_per_unit_usd)}× higher.
           </p>

@@ -11,7 +11,7 @@ import { useRun } from "../lib/run";
 import { date, int, load, money, moneyShort, pct } from "../lib/format";
 import { LotBadges, LotDrawer } from "./LotDrawer";
 
-type View = "purchases" | "review" | "unresolved" | "future" | "waiting";
+type View = "purchases" | "review" | "unresolved" | "future" | "waiting" | "decisions";
 
 function delta(cur: number, base: number, fmt: (x: number) => string, manual: boolean) {
   if (!manual || Math.abs(cur - base) < 1e-6) return null;
@@ -52,6 +52,7 @@ const flowParts = [
   { key: "unresolved", label: "Unresolved", color: "var(--color-status-critical)", icon: AlertOctagon },
   { key: "waiting", label: "Waiting", color: "var(--color-series-1)", icon: Hourglass },
   { key: "future", label: "Moved to Future", color: "var(--color-axis)", icon: CalendarClock },
+  { key: "cancelled", label: "Cancelled", color: "var(--color-status-critical)", icon: AlertOctagon },
 ] as const;
 
 function DemandFlow({ p }: { p: Plan }) {
@@ -138,7 +139,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 const field = fieldClass;
 
 export function BuyPlan() {
-  const { runId, run, setRunId, openLot, setOpenLot } = useRun();
+  const { runId, run, runs, setRunId, openLot, setOpenLot } = useRun();
   const [view, setView] = useState<View>("purchases");
   const [selected, setSelected] = useState<Lot | null>(null);
   const [q, setQ] = useState("");
@@ -149,17 +150,18 @@ export function BuyPlan() {
 
   const plan = useQuery({ queryKey: ["plan", runId], queryFn: () => api.plan(runId) });
   const trend = useQuery({ queryKey: ["trend"], queryFn: api.trend, staleTime: Infinity });
+  const knownRuns = new Set(runs.slice(0, runs.findIndex(r => r.run_id === runId) + 1).map(r => r.run_id));
   const reqs = useQuery({
     queryKey: ["reqs", runId, view],
     queryFn: () => api.requisitions(runId, view as "unresolved" | "future" | "waiting"),
-    enabled: view !== "purchases" && view !== "review",
+    enabled: ["unresolved", "future", "waiting"].includes(view),
   });
 
   // a lot chosen in the command palette
   useEffect(() => {
     if (!openLot || !plan.data) return;
     const lot = plan.data.lots.find((l) => l.lot_id === openLot);
-    if (lot) { setView(lot.decision === "Review" ? "review" : "purchases"); setSelected(lot); }
+    if (lot) { setView(lot.decision === "Review" ? "review" : lot.decision === "Buy" ? "purchases" : "decisions"); setSelected(lot); }
     setOpenLot(null);
   }, [openLot, plan.data, setOpenLot]);
 
@@ -167,7 +169,7 @@ export function BuyPlan() {
     const all = plan.data?.lots ?? [];
     const needle = q.trim().toLowerCase();
     return all.filter((l) =>
-      (view === "review" ? l.decision === "Review" : l.decision !== "Review") &&
+      (view === "review" ? l.decision === "Review" : view === "decisions" ? ["No-Go", "Delay"].includes(l.decision) : l.decision === "Buy") &&
       (!market || l.market_destination === market) &&
       (!factory || l.assigned_factory === factory) &&
       (!onlyWarnings || l.warnings) &&
@@ -209,19 +211,20 @@ export function BuyPlan() {
         </div>
       )}
 
-      <KpiGrid p={p} trend={trend.data ?? []} />
+      <KpiGrid p={p} trend={(trend.data ?? []).filter(t => knownRuns.has(t.run_id))} />
       {p.decision_issues?.map((issue) => <p key={issue} className="mb-3 rounded border border-warn/30 bg-warn-soft p-3 text-sm text-warn">{issue}</p>)}
       <DemandFlow p={p} />
 
       <Tabs value={view} onChange={setView} tabs={[
-        { value: "purchases", label: draft ? "Draft purchases" : "Purchases", count: p.lots.length - reviewCount, icon: CalendarCheck2 },
+        { value: "purchases", label: draft ? "Draft purchases" : "Purchases", count: p.lots.filter(l => l.decision === "Buy").length, icon: CalendarCheck2 },
         { value: "review", label: "Needs planner review", count: reviewCount, icon: ShieldAlert },
         { value: "unresolved", label: "Unresolved", count: p.counts.unresolved, icon: AlertOctagon },
         { value: "future", label: "Moved to Future", count: p.counts.future, icon: CalendarClock },
         { value: "waiting", label: "Waiting", count: p.counts.waiting, icon: Hourglass },
+        { value: "decisions", label: "Delayed / cancelled", count: p.lots.filter(l => ["No-Go", "Delay"].includes(l.decision)).length, icon: Clock },
       ]} />
 
-      {view === "purchases" || view === "review" ? (
+      {view === "purchases" || view === "review" || view === "decisions" ? (
         <>
           {view === "review" && (
             <div className="mb-3 flex items-start gap-2 rounded-2xl border border-warn/25 bg-warn-soft p-3 text-sm text-warn">
