@@ -1,7 +1,7 @@
 # Acme Sports Buy Planner: technical documentation
 
 > Historical description below predates the latest client-rule alignment. Use
-> `docs/client_rule_updates.md` and the settings view for current behavior. Old 23-window counts,
+> [the current core/forecast release contract](core_forecast_release.md) and the settings view for current behavior. Old 23-window counts,
 > numeric comparisons and last-chance overload exceptions are not current validation results.
 
 Team Vantage · University at Buffalo × Globant · October 2026
@@ -134,7 +134,26 @@ Every requisition ends with exactly one outcome:
 | `UNRESOLVED_MPQ` | Below MPQ and could not wait for the next window | 649 | 361,615 |
 | `OPEN` | Not yet due at the end of the data (still waiting) | 1,606 | 999,030 |
 
-Unresolved and review demand is shown separately in the app and is never treated as a feasible purchase.
+Unresolved and review demand is never treated as a feasible purchase automatically.
+
+### Outstanding review requests (October 30 update)
+
+The Needs planner review tab includes current capacity-review lots and outstanding exceptions that previously
+had only a PR outcome: overdue retries, unresolved MOQ/MPQ and last-chance/unconfirmed-wholesale conflicts.
+Outstanding PRs are grouped only within the same article, market and a strict 15-day RDD span. Each PR has one
+row membership per run; its original ID and quantity are retained. Quantity-shortfall outcome codes remain
+available in the Unresolved tab as well, while the review lot provides the decision controls.
+
+Review-only rows reserve no capacity and are not bought merely because they reappear. They carry into weekly
+drafts and later buying windows until resolved. Buy rechecks eligibility, certification, MOQ/MPQ, RDD grouping
+and the hard capacity ceiling. An overdue eligible request may be approved explicitly with its late arrival
+shown. No-Go removes it from subsequent backlog; Delay postpones it. Draft rows remain read-only. Unconfirmed
+wholesale conflicts remain reviewable/cancellable but cannot be purchased by bypassing eligibility.
+
+The review visibility accounting check now verifies current-run decision-row coverage rather than merely
+checking that the PR exists in the input data. The tab can be searched by PR ID, article or lot. Historical
+review rows remain available in their own runs; they do not represent duplicate purchases. The optional
+automatic optimizer excludes these newly exposed review-only exceptions from its candidate pool.
 
 ## 6. Factory assignment and the capacity ledger
 

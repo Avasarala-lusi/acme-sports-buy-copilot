@@ -37,6 +37,10 @@ def universe(planner: Planner) -> pd.DataFrame:
     """Lots to plan: the rule plan's bought lots, plus review lots with each requisition kept once (first window)
     and never one that the rules bought later."""
     lots = planner.all_lots()
+    # Newly exposed backlog rows are planner exceptions, not automatic optimizer
+    # candidates (they may be below MOQ or conflict with forecast exclusion).
+    if "review_only" in lots:
+        lots = lots[~lots["review_only"].fillna(False)]
     decision = lots["auto_decision"]
     bought = lots[decision == "Buy"].copy()
     bought["rule_factory"] = bought["assigned_factory"]

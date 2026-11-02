@@ -33,7 +33,7 @@ def settings_items(cfg: dict) -> list[dict]:
     ]
     replacements = {
         "Buying window": ("MID/EOM; latest PO weekday on/before 15th and last PO weekday of month",
-                          "Assumption: exact date mapping pending confirmation"),
+                          "Four client PO-date examples verified; remaining calendar formula is a team default"),
         "Factory limit": (f"{cap['hard_limit_pct']}% including manual approvals and last-chance", "Client confirmed"),
         "No certified factory has room": ("Keep visible for planner review; no assumed overtime", "Client confirmed"),
         "Last-chance conflicts": ("Priority first, but never bypass capacity or confirmation conflicts", "Client guidance; user review policy"),
@@ -51,7 +51,10 @@ def settings_items(cfg: dict) -> list[dict]:
         ("MPQ", "Same article, factory, buying window and 15-day RDD span; category chooses threshold", "Client confirmed"),
         ("Suggested RDD", "PO + manufacture + transit; signed exposure vs original RDD", "User adopted"),
         ("Hold / Delay", "One-window scope; outstanding demand returns later; No-Go cancels", "Assumption: reversible saved decisions"),
-        ("Pull-forward source", "Original scheduled buying run_id, not intake run", "Assumption: confirm ID meaning"),
+        ("Pull-forward source", "Original future scheduled buying run_id, not intake run", "Client field definition; team mapping"),
+        ("Forecast", f"{cfg.get('forecast', {}).get('model', 'stage_seasonal')}; 17-week intake horizon, four-window load view", "Team method; historical evaluation required"),
+        ("Forecast warnings", "Saved decisions included; estimates warn but never reserve capacity or block a valid purchase", "User-approved workflow"),
+        ("Bonus features", "Upcoming; optimizer, on-time simulation and disruption tools are disabled by default", "User scope decision"),
     ])
     return [{"topic": t, "setting": s, "status": st} for t, s, st in rows]
 

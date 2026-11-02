@@ -14,8 +14,8 @@ supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client
 - **Go/No-Go decisions:** saved changes replay later demand and capacity. Hold/Delay applies to one window;
   No-Go cancels selected PRs. Approvals and last-chance status never bypass the 100% ceiling.
 - **Pull-forward analysis:** capacity-driven, across the next four buying windows; moves are tested together on one ledger with MOQ and MPQ checks.
-- **Demand and load forecast:** demand that has not arrived yet, 17 weeks ahead with a P10-P90 range, turned into factory load with early warnings; the model is chosen by a walk-forward backtest of eight models (including SARIMAX, XGBoost, Random Forest), after testing that demand is seasonal.
-- **Delivery impact:** where late or undelivered demand falls (market, product line, channel, customer) and its value at the client's $21/unit average.
+- **Demand and load forecast:** 17-week intake estimates with explicit fallback/range status; saved-decision load and four-window pressure warnings beside purchase decisions. Eight methods run under past-only tests with a separate final period. Forecasts do not create purchases or reserve capacity.
+- **Planning impact:** simulated late and unbought demand by market, product line, article, factory and customer. $21/unit is illustrative exposure, not a verified price, penalty or profit loss.
 - **Trend notebook** (`notebooks/trend_analysis.ipynb`): the five required analyses over 100 weeks: seasonal demand, factory utilisation and backup triggers, pull-forward opportunities, forecast vs confirmed-order coverage, and sales value by market and credit rating.
 - **Validation:** complete accounting, rule-violation checks, hand-checked scenarios, comparison with the as-is plan and evaluation against the client's baseline.
 - **Documentation:** `docs/technical_documentation.md`; hand-checkable calculations in `docs/worked_examples.md`;
@@ -26,13 +26,15 @@ supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client
 Current rule details and provisional defaults: `docs/client_rule_updates.md`. Old worked examples and
 numeric comparisons must be regenerated before reuse. `suggested_rdd` is the single proposed arrival date.
 
-Data health checks, on-time probability, network optimiser with a cost-vs-service slider, planner
-benchmark and disruption drill; stretch: learned thresholds and plain-English questions.
+Optimizer, simulated on-time risk, planner benchmark, disruption drill and data-health extensions are
+**upcoming prototypes**, disabled in this release (`features.experimental: false`). Their code is retained
+for later weeks; it is not validated core functionality. See [current release contract](docs/core_forecast_release.md).
 
 ## Run it
-Requires Python 3.10+ and Node.js 18+.
+Validated with Python 3.12; use Python 3.12 and Node.js 18+ for the documented setup.
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 (cd frontend && npm install && npm run build)  # build the web app (not committed; rebuild after every pull)
 ```
@@ -46,11 +48,17 @@ python scripts/run_plan.py                 # plan all runs, write outputs/
 (cd frontend && npm run dev)               # web app with live reload, http://localhost:5173 (API must be running)
 jupyter notebook notebooks/trend_analysis.ipynb  # the five trend analyses
 python scripts/build_worked_examples.py     # regenerate the worked examples
-pytest                                     # run the remaining automated tests
+pytest -m "not experimental"               # current core planning + forecast checks
+pytest -m experimental                     # optional prototypes; not current acceptance
 ```
 The first load processes all 100 runs and may take a while; the automatic plan is cached in `outputs/`
 and rebuilt when engine code, configuration or input data changes. Saved decisions use a separate
 replay and never alter the cached automatic reference.
+
+On macOS, XGBoost also requires the OpenMP runtime (`brew install libomp`). Windows users can create
+the environment with `py -3.12 -m venv .venv` and activate `.venv\\Scripts\\activate` in Command Prompt
+or `.venv\\Scripts\\Activate.ps1` in PowerShell. Run `python -m pip check` after installing dependencies.
+The Forecast page's method selector changes the preview only; decision warnings use `forecast.model`.
 
 ## Updating to the latest version
 ```bash

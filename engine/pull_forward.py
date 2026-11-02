@@ -115,6 +115,14 @@ def recommendations(planner: Planner, run_id: str) -> pd.DataFrame:
         return pd.DataFrame()
     opn["window"] = opn["start"].map(lambda d: _window_index(edges, d))
     by_market, by_factory = _committed_quantities(planner, run_id, edges)
+    # Backlog review rows reserve no capacity and cannot contribute purchased
+    # quantities. Filter once, rather than scanning thousands of them for each
+    # proposed move and each minimum-quantity check.
+    planned = planner.run_result(run_id).lots
+    if len(planned):
+        decision = "decision" if "decision" in planned else "auto_decision"
+        planned = planned[planned[decision] == "Buy"]
+    planned_buys = list(planned.itertuples())
     for pr in opn.itertuples():  # open demand is planned too: it counts towards the minimums
         if pr.window is not None:
             by_market[(pr.article_id, pr.market_destination, pr.window)] += pr.requested_qty
@@ -185,9 +193,8 @@ def recommendations(planner: Planner, run_id: str) -> pd.DataFrame:
                         if market_only:
                             members=members[members["market_destination"]==market]
                         total=float(members["requested_qty"].sum())
-                        planned=planner.run_result(run_id).lots
-                        for lot in planned.itertuples() if len(planned) else []:
-                            if getattr(lot,"decision",lot.auto_decision)!="Buy" or lot.article_id!=article or lot.assigned_factory!=f:
+                        for lot in planned_buys:
+                            if lot.article_id!=article or lot.assigned_factory!=f:
                                 continue
                             if _window_index(edges,lot.production_start)!=index:
                                 continue

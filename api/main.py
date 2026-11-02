@@ -10,6 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -59,12 +60,40 @@ def _records(df: pd.DataFrame) -> list[dict]:
 
 
 def _json(obj):
-    return json.loads(json.dumps(obj, default=str))
+    # NumPy booleans must stay booleans: the string "False" is truthy in the UI.
+    return json.loads(json.dumps(obj, default=lambda x: x.item() if isinstance(x, np.generic) else str(x)))
 
 
 def _check_run(run_id: str):
     if run_id not in planner().run_index:
         raise HTTPException(404, f"unknown run {run_id}")
+
+
+def _waiting_ids(result):
+    lots = result.lots
+    pending = set()
+    if len(lots):
+        decision = "decision" if "decision" in lots else "auto_decision"
+        pending = set(filter(None, lots.loc[lots[decision] == "Review", "pr_ids"].str.split(",").explode()))
+    return [p for p in result.open_prs if p not in pending]
+
+
+def _current_load_fields(p, run_id, lots):
+    """Display final saved/draft load, not the earlier step at which routing occurred."""
+    ledger = p.snapshots[run_id]
+    before, after = [], []
+    for row in lots.itertuples():
+        allocations = ledger.allocations(row.production_start, row.mfg_days, row.consolidated_qty)
+        bought = getattr(row, "decision", row.auto_decision) == "Buy"
+        cap = ledger.capacity[row.assigned_factory]
+        base = [ledger.units[row.assigned_factory].get(week, 0.0) for week, _ in allocations]
+        before.append(round(max(max(0.0, units-(qty if bought else 0.0))/cap*100
+                                for units, (_, qty) in zip(base, allocations)), 1))
+        after.append(round(max((units+(0.0 if bought else qty))/cap*100
+                               for units, (_, qty) in zip(base, allocations)), 1))
+    if len(lots):
+        lots["util_before_pct"], lots["util_after_pct"] = before, after
+    return lots
 
 
 def _kpis(lots: pd.DataFrame, outcomes: pd.DataFrame) -> dict:
@@ -139,8 +168,14 @@ def data_issues():
 
 @app.get("/features")
 def features():
-    return {"forecast": True, "risk": True, "optimizer": True, "drill": True,
-            "benchmark": True, "ask": False, "data_health": True}
+    experimental = automatic_planner().cfg.get("features", {}).get("experimental", False)
+    return {"forecast": True, "risk": experimental, "optimizer": experimental, "drill": experimental,
+            "benchmark": experimental, "ask": False, "data_health": experimental}
+
+
+def _require_experimental():
+    if not automatic_planner().cfg.get("features", {}).get("experimental", False):
+        raise HTTPException(409, "Upcoming feature: excluded from the current core planning release")
 
 
 def _checks():
@@ -165,23 +200,27 @@ def plan(run_id: str):
     p, s = planner(), store()
     r = p.run_result(run_id)
     eff = effective_lots(p, run_id, s)
+    eff = _current_load_fields(p, run_id, eff)
     if len(eff):
         eff["certified_factories"] = eff["article_id"].map(lambda a: sorted(p.certified[a]))
     outcome = r.outcomes["outcome"] if len(r.outcomes) else pd.Series(dtype=str)
     k = _kpis(eff, r.outcomes)
-    waiting_units = float(p.prs.loc[r.open_prs, "requested_qty"].sum()) if r.open_prs else 0.0
+    # Review and unresolved PRs remain open, but must not also be counted as waiting.
+    waiting = _waiting_ids(r)
+    waiting_units = float(p.prs.loc[waiting, "requested_qty"].sum()) if waiting else 0.0
+    qty = lambda kind: float(p.prs.loc[r.outcomes.loc[r.outcomes["outcome"] == kind, "pr_id"], "requested_qty"].sum()) if len(r.outcomes) else 0.0
     return {"run_id": run_id, **_window_info(run_id),
             "kpis": k,
             "kpis_automatic": _kpis(automatic_planner().run_result(run_id).lots,
                                     automatic_planner().run_result(run_id).outcomes),
             "decision_issues": p.decision_issues,
-            "units": {"bought": k["units_bought"], "review": k["review_units"], "unresolved": k["unresolved_units"],
-                      "future": k["forecast_excluded_units"], "waiting": waiting_units},
+            "units": {"bought": k["units_bought"], "review": qty(PLANNER_REVIEW), "unresolved": k["unresolved_units"],
+                      "future": k["forecast_excluded_units"], "waiting": waiting_units, "cancelled": qty("CANCELLED")},
             "manual_changes": s.count(run_id),
             "counts": {"unresolved": int(outcome.isin([UNRESOLVED_MOQ, UNRESOLVED_MPQ]).sum()),
                        "future": int((outcome == FUTURE_FORECAST).sum()),
                        "review": int((outcome == PLANNER_REVIEW).sum()),
-                       "waiting": len(r.open_prs)},
+                       "waiting": len(waiting)},
             "lots": _records(eff)}
 
 
@@ -209,7 +248,8 @@ def run_requisitions(run_id: str, status: str = Query(..., pattern="^(unresolved
     r = p.run_result(run_id)
     cols = ["pr_id", "article_id", "market_destination", "requested_qty", "rdd_original"]
     if status == "waiting":
-        df = p.prs.loc[r.open_prs, cols + ["release_primary"]].reset_index(drop=True) if r.open_prs \
+        waiting = _waiting_ids(r)
+        df = p.prs.loc[waiting, cols + ["release_primary"]].reset_index(drop=True) if waiting \
             else pd.DataFrame(columns=cols)
         df["outcome"] = OPEN
         df["reason"] = [p.open_reason(x, run_id) for x in df["pr_id"]] if len(df) else []
@@ -406,14 +446,22 @@ def network(run_id: str):
 
 # ------------------------------------------------------------------ export
 @lru_cache(maxsize=64)
-def _forecast(run_id: str):
-    p = automatic_planner()  # the forecast reads demand and committed load; decisions do not change demand
-    intake = forecast.forecast_intake(p, run_id)
+def _intake_cached(run_id: str, model: str):
+    # Manual decisions change commitments, not historical demand. Cache only
+    # intake predictions; rebuild operational load from the current replay.
+    return forecast.forecast_intake(automatic_planner(), run_id, model)
+
+
+def _forecast(run_id: str, model: str | None = None):
+    p = planner()
+    model = model or p.cfg["forecast"]["model"]
+    intake = _intake_cached(run_id, model)
     weekly, windows = forecast.forecast_load(p, run_id, intake)
     series = forecast.intake_series(p)
     origin = int(p.runs.set_index("run_id").loc[run_id, "week_number"])
     history = series[series["week"] <= origin][["factory", "week", "date", "units"]]
     return {"run_id": run_id, "origin_week": origin, "model": str(intake["model"].iloc[0]),
+            "basis": "Saved planner decisions; forecast load is advisory, not a purchase",
             "horizon_weeks": forecast.horizon_weeks(p),
             "stage_coverage_pct": float(intake["has_stage"].mean() * 100),
             "history": _records(history), "intake": _records(intake),
@@ -421,9 +469,23 @@ def _forecast(run_id: str):
 
 
 @app.get("/forecast/{run_id}")
-def forecast_view(run_id: str):
+def forecast_view(run_id: str, model: str | None = None):
     _check_run(run_id)
-    return _forecast(run_id)
+    try:
+        return _forecast(run_id, model)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/forecast/{run_id}/lots/{lot_id}")
+def forecast_lot_warning(run_id: str, lot_id: str, factory: str | None = None):
+    _check_run(run_id)
+    p = planner()
+    try:
+        intake = _intake_cached(run_id, p.cfg["forecast"]["model"])
+        return _json(forecast.decision_warning(p, run_id, lot_id, factory, intake))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 _backtest_lock = threading.Lock()
@@ -470,6 +532,7 @@ def _risk(run_id: str | None):
 @app.get("/risk")
 def risk_view(run_id: str | None = None):
     """On-time probability of the bought plan (or one buying run) under lead-time variation."""
+    _require_experimental()
     if run_id is not None:
         _check_run(run_id)
     return _risk(run_id)
@@ -486,6 +549,7 @@ def _network_results():
 @app.get("/network-plans")
 def network_plans():
     """Cost/service frontier and planner benchmark (one optimiser solve per weight; a few minutes the first time)."""
+    _require_experimental()
     with _network_lock:
         return _network_results()
 
@@ -512,6 +576,7 @@ def _drill(factory: str, start: str, end: str, weight: float):
 @app.post("/drill")
 def drill_view(d: Drill):
     """Close a factory for a period; compare the rule engine's and the optimiser's response (about a minute)."""
+    _require_experimental()
     try:
         return _drill(d.factory, d.start, d.end, round(min(max(d.weight, 0.0), 1.0), 2))
     except ValueError as e:
@@ -526,6 +591,7 @@ def _health(run_id: str | None):
 @app.get("/data-health")
 def data_health_view(run_id: str | None = None):
     """Unusual records in each run's data load, before they affect the plan."""
+    _require_experimental()
     if run_id is not None:
         _check_run(run_id)
     return _health(run_id)

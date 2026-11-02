@@ -57,6 +57,18 @@ def test_requisition_lists(client):
     assert client.get(f"/runs/{RUN}/requisitions?status=bad").status_code == 422
 
 
+def test_overdue_pr_remains_in_current_review_rows(client):
+    pr_id = "PR-4EE6B9E79A"
+    for run in ("MRP-WK019", "MRP-WK020", "MRP-WK022"):
+        plan = client.get(f"/plan/{run}").json()
+        matches = [lot for lot in plan["lots"] if pr_id in lot["pr_ids"].split(",")]
+        assert len(matches) == 1
+        lot = matches[0]
+        assert lot["decision"] == "Review"
+        detail = client.get(f"/lots/{run}/{lot['lot_id']}/requisitions").json()
+        assert any(row["pr_id"] == pr_id and row["requested_qty"] == 411 for row in detail)
+
+
 def test_decision_round_trip(client):
     lot = next(l for l in client.get(f"/plan/{RUN}").json()["lots"] if l["auto_decision"] == "Buy")
     client.put(f"/overrides/{RUN}/lots/{lot['lot_id']}", json={"decision": "No-Go", "factory": None, "note": "test"})
@@ -112,6 +124,19 @@ def test_checks_include_baseline_evaluation(client):
 def test_forecast_endpoint(client):
     f = client.get(f"/forecast/{RUN}").json()
     assert f["intake"] and f["load"] and f["windows"] and f["origin_week"] == int(RUN[-3:])
+    assert all(row["actual"] is None for row in f["intake"])
+    assert client.get(f"/forecast/{RUN}?model=invented").status_code == 400
+
+
+def test_waiting_demand_does_not_double_count_review_or_unresolved(client):
+    plan = client.get("/plan/MRP-WK022").json()
+    review = {p for row in plan["lots"] if row["decision"] == "Review" for p in row["pr_ids"].split(",") if p}
+    waiting = client.get("/runs/MRP-WK022/requisitions?status=waiting").json()
+    unresolved = client.get("/runs/MRP-WK022/requisitions?status=unresolved").json()
+    assert review.isdisjoint(row["pr_id"] for row in waiting)
+    assert plan["units"]["waiting"] == sum(row["requested_qty"] for row in waiting)
+    assert plan["units"]["unresolved"] == sum(row["requested_qty"] for row in unresolved)
+    assert plan["counts"]["waiting"] == len(waiting)
 
 
 def test_impact_endpoint(client):
@@ -121,9 +146,7 @@ def test_impact_endpoint(client):
 
 def test_extension_endpoints(client):
     f = client.get("/features").json()
-    assert all(f[k] for k in ["risk", "optimizer", "drill", "benchmark", "data_health"]) and f["ask"] is False
-    risk = client.get(f"/risk?run_id={RUN}").json()
-    assert risk["run_id"] == RUN
-    health = client.get(f"/data-health?run_id={RUN}").json()
-    assert health["run"]["run_id"] == RUN and health["checks"]
-    assert client.get("/risk?run_id=NOPE").status_code == 404
+    assert not any(f[k] for k in ["risk", "optimizer", "drill", "benchmark", "data_health", "ask"])
+    assert f["forecast"]
+    for path in ["/risk", "/data-health", "/network-plans"]:
+        assert client.get(path).status_code == 409

@@ -32,4 +32,3 @@ frontend/.vite/
 frontend/*.tsbuildinfo
 
 docs/client_rule_updates.md
-tests/test_client_clarifications.py

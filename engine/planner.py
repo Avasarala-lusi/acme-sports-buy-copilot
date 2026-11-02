@@ -454,7 +454,53 @@ class Planner:
         for p in used_future:  # piggybacked demand left the open pool
             if self.outcomes.get(p, {}).get("outcome") == BOUGHT:
                 self.open.pop(p, None)
+        rows.extend(self._review_backlog(run_id, buy_date, draft, rows, ledger))
         return rows, ledger
+
+    def _review_backlog(self, run_id, buy_date, draft, rows, ledger):
+        """Give every outstanding exception a current-run decision row, without reserving capacity.
+
+        Late retries, MOQ/MPQ shortfalls and Rule 5/6 conflicts can exit the cascade before
+        a lot is created. Preserve their outcome/reason, but expose them through the same
+        guarded planner-decision workflow as other review lots. Never duplicate a PR that
+        already belongs to a purchase or review row in this run.
+        """
+        represented = {p for row in rows for p in row["pr_ids"].split(",") if p}
+        pending = [p for p in self.open if p not in represented and
+                   self.outcomes.get(p, {}).get("outcome") in
+                   {PLANNER_REVIEW, UNRESOLVED_MOQ, UNRESOLVED_MPQ}]
+        if not pending:
+            return []
+        result = []
+        frame = self.prs.loc[pending]
+        for (article, market, last_chance), group in frame.groupby(
+                ["article_id", "market_destination", "last_chance"], sort=True):
+            ids = list(group["pr_id"])
+            for positions in group_by_rdd(list(group["rdd_original"]),
+                                         self.cfg["grouping"]["window_days"], "anchor"):
+                members = [ids[i] for i in positions]
+                identity = hashlib.sha256(",".join(sorted(members)).encode()).hexdigest()[:12]
+                lot = Lot(f"{run_id}-{'D' if draft else 'L'}{identity}", run_id,
+                          article, market, members, last_chance=bool(last_chance))
+                lot.reasons.append("Outstanding request: awaiting planner decision; no capacity reserved")
+                outcomes = {p: dict(self.outcomes[p]) for p in members}
+                lot.warnings.extend(dict.fromkeys(o["reason"] for o in outcomes.values()))
+                primary = self.rows[members[0]]["primary"]
+                m, t = self.lot_lead_times(members, primary)
+                qty, rdd = self._qty(members), self._min_rdd(members)
+                assignment = {"factory": primary, "primary": primary, "backup": False,
+                              "mfg": m, "trans": t, "release": rdd-pd.Timedelta(days=m+t),
+                              "start": buy_date, "rdd": rdd, "qty": qty, "status": REVIEW,
+                              "util_before": ledger.utilization(primary, ledger.weeks_for(buy_date, m)),
+                              "util_after": ledger.utilization_with(primary, buy_date, m, qty),
+                              "reasons": [], "warnings": [],
+                              "alternatives": self._alternatives(lot, ledger, buy_date, qty)}
+                row = self._lot_row(lot, assignment, self.pr_notes, buy_date, draft)
+                row["review_only"] = True
+                result.append(row)
+                for p, outcome in outcomes.items():
+                    self._decide([p], run_id, outcome["outcome"], outcome["reason"], lot.lot_id)
+        return result
 
     # ---------------------------------------------------------------- steps
     def _apply_piggyback(self, lot: Lot, picked, used_future, why: str) -> None:
@@ -664,6 +710,7 @@ class Planner:
             "is_piggyback_applied": bool(lot.piggyback_sources),
             "piggyback_source_window": ",".join(lot.piggyback_sources) or None,
             "last_chance": lot.last_chance, "decision_type": lot.decision_type,
+            "review_only": False,
             "alternatives": " | ".join(a.get("alternatives", [])),
             "reason": " | ".join(reasons), "warnings": " | ".join(warnings),
         }

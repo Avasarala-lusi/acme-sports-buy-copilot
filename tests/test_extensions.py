@@ -7,7 +7,7 @@ import pytest
 
 from tests.conftest import needs_data
 
-pytestmark = needs_data
+pytestmark = [needs_data, pytest.mark.experimental]
 
 
 @pytest.fixture(scope="module")

@@ -35,11 +35,22 @@ def accounting_report(planner: Planner) -> dict:
         return set(filter(None,lots.loc[decisions==d,"pr_ids"].str.split(",").explode()))
     hard = planner.cfg["capacity"]["hard_limit_pct"]
     units_by_outcome = out.groupby("outcome")["requested_qty"].sum().to_dict()
+    review_ids = set(out.loc[out["outcome"].isin(
+        [PLANNER_REVIEW, "UNRESOLVED_MOQ", "UNRESOLVED_MPQ"]), "pr_id"])
+    current = planner.results[planner.runs.iloc[planner.processed]["run_id"]]
+    current_lots = current.lots
+    actionable = set()
+    if len(current_lots):
+        decision = "decision" if "decision" in current_lots else "auto_decision"
+        actionable = set(filter(None, current_lots.loc[current_lots[decision] == "Review", "pr_ids"]
+                                .str.split(",").explode()))
+    review_visible = (review_ids <= actionable if current.is_buying_run or
+                      planner.cfg["buying_window"].get("weekly_drafts", True) else True)
     checks = {
         "every_pr_has_one_outcome": set(out["pr_id"]) == set(seen["pr_id"]) and out["pr_id"].is_unique,
         "no_pr_in_two_lots": in_lots.is_unique,
         "bought_prs_match_lots": ids_of("Buy") == set(out.loc[out["outcome"] == BOUGHT, "pr_id"]),
-        "review_prs_visible": set(out.loc[out["outcome"]==PLANNER_REVIEW,"pr_id"]) <= set(planner.prs["pr_id"]),
+        "review_prs_visible": review_visible,
         "purchases_only_in_buying_windows": set(lots["run_id"]) <= set(planner.buying_runs()) if len(lots) else True,
         "no_overload": overload_without_last_chance(planner) <= hard + 1e-6,
         "units_add_up": abs(out["requested_qty"].sum() - seen["requested_qty"].sum()) < 1e-6,

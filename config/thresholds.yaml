@@ -66,8 +66,16 @@ backup_source: factory_chain     # [client] matrix certification gates each fact
                                  # assignment walks the factory chain (backup, its backup, ... to CN04, the last resort)
 
 forecast:
-  model: stage_seasonal          # stage_seasonal | extra_trees | gradient_boosting | seasonal_naive | moving_average
-                                 # chosen by the walk-forward backtest (lowest WAPE on the current data)
+  model: stage_seasonal          # stage_seasonal | sarimax | random_forest | xgboost | extra_trees | gradient_boosting | seasonal_naive | moving_average
+  horizon_weeks: 17             # team evaluation horizon; separate from four semi-monthly load windows (~8 weeks)
+  calibration_origins: 6        # rolling past-only forecasts for the selected model's uncertainty range
+  calibration_step: 4
+  backtest_step: 4
+  holdout_weeks: 17             # final period excluded from model selection
+  default_release_lag_weeks: 13 # assumption only when a factory has no known eligible PR history
+
+features:
+  experimental: false           # upcoming work: optimizer, simulated on-time risk, disruption drill, benchmark, data health
 
 impact:
   price_per_unit_usd: 21         # [client] average price per unit to value late or undelivered units ($19-22 also fine)

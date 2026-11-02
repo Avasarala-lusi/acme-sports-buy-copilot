@@ -36,6 +36,7 @@ def requisition_status(planner: Planner) -> pd.DataFrame:
     arrival = (lots.assign(pr_id=lots["pr_ids"].str.split(",")).explode("pr_id")
                .set_index("pr_id")["suggested_rdd"]) if len(lots) else pd.Series(dtype="datetime64[ns]")
     plan_arrival = firm.index.to_series().map(arrival)
+    assigned = lots.assign(pr_id=lots["pr_ids"].str.split(",")).explode("pr_id").set_index("pr_id")["assigned_factory"]
 
     rdd = prs["rdd_original"]
     df = pd.DataFrame({
@@ -43,6 +44,8 @@ def requisition_status(planner: Planner) -> pd.DataFrame:
         "market": prs["market_destination"].to_numpy(), "category": prs["category"].to_numpy(),
         "product_line": prs["article_id"].str.split("-").str[0].to_numpy(),
         "article_id": prs["article_id"].to_numpy(), "customer_id": prs["customer_id"].to_numpy(),
+        "factory": firm.index.to_series().map(assigned).fillna(prs["primary"]).to_numpy(),
+        "unconfirmed_conflict": ((prs["channel_id"] == "01") & ~prs["has_order"] & ~prs["early_buy"]).to_numpy(),
         "channel": prs["channel_id"].map({"01": "Wholesale", "02": "DTC"}).to_numpy(),
         "nsv": prs["nsv"].to_numpy(), "outcome": firm["outcome"].to_numpy(),
         "baseline_factory": prs["assigned_factory"].to_numpy(),
@@ -128,6 +131,7 @@ def impact_report(planner: Planner, price: float | None = None) -> dict:
         "firm_units_per_week": total / weeks,
         "network_weekly_capacity": float(planner.factories["weekly_capacity_units"].sum()),
         "firm_requisitions": int(len(df)), "firm_units": total,
+        "unconfirmed_conflict_units": float(df.loc[df["unconfirmed_conflict"], "units"].sum()),
         "plan": summary("plan_status"), "baseline": summary("baseline_status"),
         "plan_median_days_late": float(late["plan_days_late"].median()) if len(late) else 0.0,
         "extra_units_not_on_time": float(extra),
@@ -138,4 +142,5 @@ def impact_report(planner: Planner, price: float | None = None) -> dict:
                        for _, _, b in LATE_BANDS],
         "by_market": by_market, "by_category": by("category"), "by_product_line": by("product_line"),
         "by_channel": by("channel"), "by_segment": by("segment"), "top_customers": by("customer", top=15),
+        "by_factory": by("factory"), "by_article": by("article_id"),
     }

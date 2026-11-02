@@ -1,3 +1,4 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = ["experimental: optional prototype features deferred beyond the core planning/forecast release"]

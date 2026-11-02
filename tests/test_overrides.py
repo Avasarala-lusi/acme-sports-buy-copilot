@@ -84,7 +84,11 @@ def test_draft_weeks_cannot_be_decided(planner, store):
 
 
 def test_manual_approval_cannot_waive_hard_capacity_limit(planner, store):
-    run = next(r for r in planner.buying_runs() if (planner.results[r].lots["auto_decision"] == "Review").any())
+    # Review now also includes quantity/eligibility exceptions. Select an actual
+    # capacity conflict instead of assuming the first review run contains one.
+    run = next(r for r in planner.buying_runs() if (
+        (planner.results[r].lots["auto_decision"] == "Review") &
+        (planner.results[r].lots["util_after_pct"] > 100)).any())
     lot = planner.results[run].lots.query("auto_decision == 'Review' and util_after_pct > 100").iloc[0]
     eff = effective_lots(planner, run, store).set_index("lot_id")
     assert eff.loc[lot["lot_id"], "decision"] == "Review"

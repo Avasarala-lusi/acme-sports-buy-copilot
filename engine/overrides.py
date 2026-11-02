@@ -36,13 +36,15 @@ class OverrideStore:
 
     def replay(self, planner):
         base = getattr(planner, "automatic_reference", planner)
-        if not self.data:
+        active = {run: record for run, record in self.data.items()
+                  if record.get("lots") or record.get("held_customers") or record.get("pulls")}
+        if not active:
             return base
-        key = hashlib.sha256(json.dumps(self.data, sort_keys=True).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps(active, sort_keys=True).encode()).hexdigest()
         cached = getattr(base, "_decision_replay", None)
         if cached and cached[0] == key:
             return cached[1]
-        effective = Planner(data=base.data, config=deepcopy(base.cfg), decisions=deepcopy(self.data))
+        effective = Planner(data=base.data, config=deepcopy(base.cfg), decisions=deepcopy(active))
         effective.automatic_reference = base
         base._decision_replay = (key, effective)
         return effective
@@ -153,6 +155,10 @@ def apply_run_decisions(planner, run_id, rows, buy_date, decisions):
             util_after_pct=round(load,1),backup_routed=factory!=row["primary_factory"])
         if row["decision"]=="Buy":
             failures=[]
+            from engine.rules.exclusion import forecast_excluded
+            if any(forecast_excluded(planner.rows[p]["channel_id"], planner.rows[p]["has_order"],
+                                     planner.rows[p]["early_buy"]) for p in keep):
+                failures.append("unconfirmed wholesale demand; confirmation or eligibility change required")
             if factory not in planner.certified[row["article_id"]]: failures.append("uncertified factory")
             if load>planner.cfg["capacity"]["hard_limit_pct"]+1e-9: failures.append("hard capacity ceiling")
             if qty<planner.cfg["quantities"]["moq_per_market"] and not row["last_chance"]:

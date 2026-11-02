@@ -10,6 +10,21 @@ from tests.conftest import needs_data
 pytestmark = needs_data
 
 
+def test_every_run_has_rows_for_all_outstanding_exceptions(planner):
+    from collections import Counter
+    for run in planner.results.values():
+        if run.outcomes.empty:
+            continue
+        pending = set(run.outcomes.loc[run.outcomes.outcome.isin(
+            [PLANNER_REVIEW, "UNRESOLVED_MOQ", "UNRESOLVED_MPQ"]), "pr_id"])
+        lots = run.lots
+        ids = [p for group in lots.pr_ids for p in group.split(",") if p] if len(lots) else []
+        assert all(n == 1 for n in Counter(ids).values()), run.run_id
+        review = lots[lots.auto_decision == "Review"] if len(lots) else lots
+        represented = {p for group in review.pr_ids for p in group.split(",") if p} if len(review) else set()
+        assert pending <= represented, run.run_id
+
+
 def test_complete_accounting(planner):
     report = accounting_report(planner)
     assert report["passed"], report["checks"]
@@ -158,7 +173,7 @@ def test_equal_release_dates_go_to_the_earliest_rdd_then_sales_value(planner):
     assert planner.priority_key([t["pr_id"].iloc[0]]) < planner.priority_key([t["pr_id"].iloc[-1]])
 
 
-def test_production_order_mpq_scope():
+def test_production_order_mpq_scope(planner):
     """Proposed MPQ scope: one production order per article, factory and buying window, whatever the RDD spread.
     Every bought order meets MPQ unless it is a last-chance buy, market lots keep their 15-day span, and it buys
     at least as much as the 15-day MPQ bands."""
@@ -175,6 +190,4 @@ def test_production_order_mpq_scope():
         qty=("consolidated_qty", "sum"), category=("category", "first"), last_chance=("last_chance", "any"))
     short = orders[orders["qty"] < orders["category"].map(lambda c: mpq_for(c, cfg["quantities"]["mpq"]))]
     assert short["last_chance"].all()
-    base = Planner()
-    base.plan_all()
-    assert lots["consolidated_qty"].sum() >= base.bought_lots()["consolidated_qty"].sum()
+    assert lots["consolidated_qty"].sum() >= planner.bought_lots()["consolidated_qty"].sum()
