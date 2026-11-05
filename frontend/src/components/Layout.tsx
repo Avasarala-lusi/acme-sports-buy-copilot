@@ -39,7 +39,7 @@ const hints: Record<string, string> = {
   "/impact": "who receives late or undelivered demand, and what it is worth",
   "/export": "fact_buy_plan_suggestions",
   "/checks": "validation, settings and data findings",
-  "/optimizer": "plan all factories together, from cheapest to safest",
+  "/optimizer": "compare cost-focused and service-focused rolling plans",
   "/risk": "chance each lot arrives on time when lead times vary",
   "/drill": "close a factory and compare how the plans respond",
   "/benchmark": "rules, optimiser and today's assignments, season by season",
@@ -79,8 +79,10 @@ export function Layout() {
   const { runs, run, runId, setRunId } = useRun();
   const qc = useQueryClient();
   const { data: featureFlags } = useQuery({ queryKey: ["features"], queryFn: api.features, staleTime: Infinity });
-  const experimentalOn = !!featureFlags?.optimizer;
-  const visiblePage = (page: { to: string }) => experimentalOn || !["/optimizer", "/risk", "/drill", "/benchmark", "/data-health"].includes(page.to);
+  const featureForPage: Record<string, keyof NonNullable<typeof featureFlags>> = {
+    "/optimizer": "optimizer", "/risk": "risk", "/drill": "drill", "/benchmark": "benchmark", "/data-health": "data_health",
+  };
+  const visiblePage = (page: { to: string }) => !featureForPage[page.to] || !!featureFlags?.[featureForPage[page.to]];
   const location = useLocation();
   const [palette, setPalette] = useState(false);
   const { data: plan } = useQuery({ queryKey: ["plan", runId], queryFn: () => api.plan(runId) });
@@ -133,7 +135,7 @@ export function Layout() {
           {nav.slice(0, 2).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Capacity</div>
           {nav.slice(2, 7).map((n) => <NavItem key={n.to} {...n} />)}
-          {experimentalOn && <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Optimise</div>}
+          {!!featureFlags?.optimizer && <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Optimise</div>}
           {nav.slice(7, 11).filter(visiblePage).map((n) => <NavItem key={n.to} {...n} />)}
           <div className="px-2.5 pb-1 pt-4 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Deliver</div>
           {nav.slice(11).filter(visiblePage).map((n) => <NavItem key={n.to} {...n} />)}

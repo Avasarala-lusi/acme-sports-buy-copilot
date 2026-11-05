@@ -6,16 +6,15 @@ type Better = "higher" | "lower" | null;
 const ROWS: { key: keyof PlanKpis; label: string; fmt: (v: number) => string; better: Better; hint?: string }[] = [
   { key: "units_bought", label: "Units bought", fmt: int, better: "higher" },
   { key: "bought_pct", label: "Demand bought", fmt: (v) => pct(v, 1), better: "higher" },
-  { key: "on_time_pct_of_firm", label: "Demand on time", fmt: (v) => pct(v, 1), better: "higher", hint: "units arriving by their requested date, as a share of all demand in the lots" },
+  { key: "on_time_pct_of_firm", label: "Eligible demand planned on time", fmt: (v) => pct(v, 1), better: "higher", hint: "units planned to arrive by their requested date, as a share of the same eligible demand" },
+  { key: "late_units", label: "Units planned late", fmt: int, better: "lower" },
   { key: "on_time_pct_of_bought", label: "Bought units on time", fmt: (v) => pct(v, 1), better: "higher" },
-  { key: "expected_on_time_pct_of_bought", label: "Expected on time with lead-time variation", fmt: (v) => pct(v, 1), better: "higher" },
   { key: "cost_per_unit_usd", label: "Production cost per unit", fmt: (v) => `$${v.toFixed(2)}`, better: "lower" },
   { key: "production_cost_usd", label: "Production cost", fmt: moneyShort, better: null },
-  { key: "units_not_bought", label: "Units not bought (planner)", fmt: int, better: "lower" },
+  { key: "units_not_bought", label: "Unbought / pending units", fmt: int, better: "lower" },
   { key: "backup_units_pct", label: "Units at a backup factory", fmt: (v) => pct(v, 1), better: "lower" },
   { key: "weeks_over_100", label: "Factory-weeks over 100%", fmt: int, better: "lower" },
   { key: "peak_utilization_pct", label: "Peak weekly load", fmt: (v) => pct(v, 0), better: "lower" },
-  { key: "orders_below_mpq", label: "Production orders below MPQ (not last chance)", fmt: int, better: "lower" },
 ];
 
 export function PlanCompare({ columns, rows, highlight }: {
@@ -40,14 +39,14 @@ export function PlanCompare({ columns, rows, highlight }: {
         <tbody>
           {ROWS.map((r) => {
             const vals = columns.map((c) => rows[c.key]?.[r.key] as number | null | undefined);
-            const nums = vals.filter((v): v is number => v != null);
+            const nums = vals.filter((v, i): v is number => v != null && columns[i].key !== "as_is");
             const best = r.better && nums.length > 1 ? (r.better === "higher" ? Math.max(...nums) : Math.min(...nums)) : null;
             return (
               <tr key={String(r.key)} className="border-b border-line/60 last:border-0">
                 <td className="py-2 pr-3 text-muted" title={r.hint}>{r.label}</td>
                 {vals.map((v, i) => (
                   <td key={columns[i].key} className={cx("font-num px-3 py-2 text-right",
-                    best != null && v != null && Math.abs(v - best) < 1e-9 ? "text-good font-medium" : "text-ink")}>
+                    columns[i].key !== "as_is" && best != null && v != null && Math.abs(v - best) < 1e-9 ? "text-good font-medium" : "text-ink")}>
                     {v == null ? "—" : r.fmt(v)}
                   </td>
                 ))}

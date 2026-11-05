@@ -11,7 +11,7 @@ const ROUTES: Partial<Record<keyof Features, string>> = {
 
 const items: { key: keyof Features; icon: typeof Gauge; title: string; text: string }[] = [
   { key: "forecast", icon: LineChart, title: "Load forecast", text: "Predict each factory's load four buying windows ahead, so demand is pulled forward before a factory overloads." },
-  { key: "optimizer", icon: SlidersHorizontal, title: "Cost vs. service planning", text: "Plan all six factories together and choose between the cheapest plan and the safest plan with a single slider." },
+  { key: "optimizer", icon: SlidersHorizontal, title: "Cost vs. service planning", text: "Plan all six factories together and compare cost-focused and planned-service-focused assignments, with priority and quantity/capacity checks." },
   { key: "risk", icon: Gauge, title: "On-time probability", text: "Simulate lead-time variation to show each lot's chance of arriving by its requested date, weighted by sales value." },
   { key: "drill", icon: Activity, title: "Disruption drill", text: "Close a factory for a period and compare how the rule-based plan and the optimised plan respond." },
   { key: "benchmark", icon: Trophy, title: "Planner benchmark", text: "Compare planning approaches on cost, on-time units and unresolved demand over seasons not used for tuning." },
@@ -23,7 +23,7 @@ export function Planned() {
   const features = useQuery({ queryKey: ["features"], queryFn: api.features, staleTime: Infinity });
   return (
     <>
-      <PageHeader eyebrow="Upcoming work" title="Capabilities" subtitle="This release focuses on the core Buy Plan workflow and forecasting. Other capabilities remain prototypes for later weeks and are not part of the current validated release." />
+      <PageHeader eyebrow="Upcoming work" title="Capabilities" subtitle="Core planning and forecasting are available. The rolling optimizer and benchmark are released after their checks pass. Delay simulation, disruption and other additions remain upcoming." />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map(({ key, icon: Icon, title, text }) => {
           const on = features.data?.[key] ?? false;

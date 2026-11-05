@@ -440,24 +440,28 @@ export interface PlanKpis {
   on_time_pct_of_firm: number; expected_on_time_units: number; expected_on_time_pct_of_bought: number;
   backup_units_pct: number; peak_utilization_pct: number; weeks_over_100: number; units_in_closed_weeks: number;
   orders_below_mpq: number | null;
+  late_units?: number;
 }
 export interface FactoryMix { factory_id: string; units: number; production_cost_usd: number; on_time_pct: number }
 export interface PlanChange {
+  pr_id?: string; rule_run_id?: string | null; plan_run_id?: string | null;
   lot_id: string; run_id: string; article_id: string; market_destination: string; qty: number;
   rule_factory: string | null; plan_factory: string | null; rule_on_time_units: number; plan_on_time_units: number;
   cost_change_usd: number;
 }
 export interface Approach {
   key: string; label: string; kind: "baseline" | "rules" | "optimiser"; weight?: number; status?: string;
-  gap_pct?: number; seconds?: number; results: Record<string, PlanKpis>;
+  gap_pct?: number | null; seconds?: number; results: Record<string, PlanKpis>;
+  validation?: { passed: boolean; rule_violations: number; solver_fallbacks: number };
 }
 export interface NetworkPlans {
-  seasons: string[]; tuning_seasons: string[]; test_seasons: string[]; weights: number[]; selected_weight: number;
+  seasons: string[]; tuning_seasons: string[]; test_seasons: string[]; weights: number[]; selected_weight: number | null;
+  complete: boolean; evaluation_note: string; baseline_note: string; service_basis: string; routing_policy: string;
   selection_rule: string; approaches: Approach[];
   selection_steps: { from: number; to: number; extra_on_time_units: number; extra_cost_usd: number;
-    cost_per_extra_on_time_unit_usd: number; average_unit_cost_usd: number; accepted: boolean }[];
+    cost_per_extra_on_time_unit_usd: number | null; average_unit_cost_usd: number; accepted: boolean }[];
   plans: { weight: number; by_factory: FactoryMix[]; changes: PlanChange[] }[];
-  universe: { lots: number; requisitions: number; units: number; from_review_lots: number };
+  universe: { lots: number; requisitions: number; units: number; from_review_lots: number; all_units: number; excluded_units: number };
 }
 type DrillKey = "rules" | "rules_disrupted" | "optimiser" | "optimiser_disrupted";
 export interface DrillResult {

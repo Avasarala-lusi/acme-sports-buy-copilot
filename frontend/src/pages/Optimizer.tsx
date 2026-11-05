@@ -11,7 +11,7 @@ import { useToken } from "../lib/theme";
 import { int, moneyShort, pct } from "../lib/format";
 
 const short = (f: string | null) => (f ? f.replace("ACME-", "") : "not bought");
-const weightName = (w: number) => (w === 0 ? "Cheapest" : w === 1 ? "Safest" : w === 0.5 ? "Balanced" : w < 0.5 ? "Leaning cheap" : "Leaning safe");
+const weightName = (w: number) => (w === 0 ? "Cost-focused" : w === 1 ? "Service-focused" : w === 0.5 ? "Balanced" : w < 0.5 ? "More cost-focused" : "More service-focused");
 
 export function Optimizer() {
   const q = useQuery({ queryKey: ["network-plans"], queryFn: api.networkPlans, staleTime: Infinity });
@@ -35,7 +35,7 @@ export function Optimizer() {
 
   const mix = plan?.by_factory ?? [];
 
-  if (q.isLoading) return <Loading label="Planning all six factories together at five cost/service settings (a few minutes the first time)…" />;
+  if (q.isLoading) return <Loading label="Replaying five settings. A fresh full calculation can take 15–25 minutes; completed settings are cached…" />;
   if (q.error) return <ErrorBox error={q.error} />;
   if (!d || !opt || !rules || !asIs) return null;
   const o = opt.results.all, r = rules.results.all;
@@ -43,24 +43,26 @@ export function Optimizer() {
 
   return (
     <>
-      <PageHeader eyebrow="Network optimiser · all buying windows, all certified factories" title="Cost vs. service"
-        subtitle={`The rule engine places lots one at a time along each article's backup chain. The optimiser plans the same ${int(d.universe.lots)} lots for all six factories at once, never above 100% of any factory-week, with MPQ per production order. Move the slider between the cheapest and the safest plan.`} />
+      <PageHeader eyebrow="Historical comparison · one buying window at a time" title="Cost vs. service"
+        subtitle={`Historical replay across all supplied runs, independent of the week selector. Compare the same ${int(d.universe.requisitions)} eligible requests (${int(d.universe.units)} units). Each window sees known demand and retains prior commitments. Priority and quantity/capacity checks come before cost or planned on-time service. This comparison does not change saved purchases.`} />
 
+      {!d.complete && <Card className="mb-5 p-5">Validation is incomplete. Do not use these figures as verified improvements.</Card>}
       <Card className="mb-5 p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="text-sm font-medium">{weightName(w)} <span className="font-num text-faint">· weight {w}</span>
             {w === d.selected_weight && <Badge tone="good">recommended</Badge>}</div>
-          <div className="text-xs text-faint">solved in {opt.seconds?.toFixed(0)} s · within {opt.gap_pct?.toFixed(1)}% of the best possible plan</div>
+          <div className="text-xs text-faint">Replay {opt.seconds?.toFixed(0)} s · {opt.validation?.passed ? "Checks passed" : "Review required"}</div>
         </div>
         <input type="range" min={0} max={weights.length - 1} step={1} value={i} onChange={(e) => setIdx(Number(e.target.value))}
           className="w-full accent-[var(--color-accent)]" aria-label="Cost vs service weight" />
-        <div className="mt-1 flex justify-between text-xs text-muted"><span>Cheapest plan</span><span>Safest plan</span></div>
+        <div className="mt-1 flex justify-between text-xs text-muted"><span>Cost-focused</span><span>Planned-service-focused</span></div>
+        <p className="mt-3 text-xs text-muted">Each setting optimizes the current window. Earlier choices affect later capacity, so moving right does not guarantee better on-time results over the full history. Compare the measured outcomes below.</p>
       </Card>
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={PackageCheck} label="Units bought · rules → optimiser" value={`${int(r.units_bought)} → ${int(o.units_bought)}`}
-          sub={`${o.units_bought >= r.units_bought ? "+" : ""}${int(o.units_bought - r.units_bought)} of the ${int(o.firm_units)} units in lots`} />
-        <Kpi icon={Clock} label="Demand in lots on time" value={`${pct(r.on_time_pct_of_firm, 1)} → ${pct(o.on_time_pct_of_firm, 1)}`}
+          sub={`${o.units_bought >= r.units_bought ? "+" : ""}${int(o.units_bought - r.units_bought)} of the ${int(o.firm_units)} eligible units`} />
+        <Kpi icon={Clock} label="Eligible demand planned on time" value={`${pct(r.on_time_pct_of_firm, 1)} → ${pct(o.on_time_pct_of_firm, 1)}`}
           sub={`bought units on time ${pct(r.on_time_pct_of_bought, 0)} → ${pct(o.on_time_pct_of_bought, 0)}`} />
         <Kpi icon={CircleDollarSign} label="Production cost per unit" value={`$${r.cost_per_unit_usd.toFixed(2)} → $${o.cost_per_unit_usd.toFixed(2)}`}
           sub={`total ${moneyShort(r.production_cost_usd)} → ${moneyShort(o.production_cost_usd)}`} />
@@ -70,9 +72,9 @@ export function Optimizer() {
 
       <div className="mb-5 grid gap-4 xl:grid-cols-[1.25fr_1fr]">
         <Card className="p-5">
-          <SectionTitle hint="same firm demand, same KPIs">Rules vs. optimiser</SectionTitle>
+          <SectionTitle hint="same eligible demand; unresolved units included">Rules vs. optimiser</SectionTitle>
           <PlanCompare highlight="opt" rows={{ as_is: asIs.results.all, rules: r, opt: o }}
-            columns={[{ key: "as_is", label: "Today", sub: "capacity ignored" }, { key: "rules", label: "Rule engine" },
+            columns={[{ key: "as_is", label: "Supplied reference", sub: "capacity ignored" }, { key: "rules", label: "Rule engine" },
               { key: "opt", label: "Optimiser", sub: weightName(w) }]} />
         </Card>
         <Card className="p-5">
@@ -94,7 +96,7 @@ export function Optimizer() {
               </ScatterChart>
             </ResponsiveContainer>
           </div>
-          <p className="mt-2 text-xs text-faint">Up and to the left is better. Today's assignments are off the chart: they reach {pct(asIs.results.all.on_time_pct_of_firm, 0)} on time only by loading factories to {pct(asIs.results.all.peak_utilization_pct, 0)} of capacity.</p>
+          <p className="mt-2 text-xs text-faint">{d.baseline_note}</p>
         </Card>
       </div>
 
@@ -111,9 +113,11 @@ export function Optimizer() {
         </div>
       </Card>
 
-      <SectionTitle hint={`largest ${plan?.changes.length ?? 0} lots planned differently from the rules`}>What changes</SectionTitle>
-      <DataTable<PlanChange> rows={plan?.changes ?? []} rowKey={(x) => x.lot_id} maxHeight="55vh" columns={[
-        { key: "run_id", header: "Run" },
+      <SectionTitle hint={`largest ${plan?.changes.length ?? 0} requests with different factory, timing or purchase outcomes`}>What changes</SectionTitle>
+      <DataTable<PlanChange> rows={plan?.changes ?? []} rowKey={(x) => x.pr_id ?? x.lot_id} maxHeight="55vh" columns={[
+        { key: "pr_id", header: "PR" },
+        { key: "rule_run_id", header: "Rule purchase" },
+        { key: "plan_run_id", header: "Optimizer purchase" },
         { key: "article_id", header: "Article" },
         { key: "market_destination", header: "Market" },
         { key: "qty", header: "Units", align: "right", render: (x) => <span className="font-num">{int(x.qty)}</span> },
@@ -123,7 +127,7 @@ export function Optimizer() {
           render: (x) => <span className="font-num">{int(x.rule_on_time_units)} → {int(x.plan_on_time_units)}</span> },
         { key: "cost_change_usd", header: "Cost change", align: "right", render: (x) => <span className="font-num">{moneyShort(x.cost_change_usd)}</span> },
       ]} />
-      <p className="mt-3 text-xs text-faint">Scope: the {int(d.universe.units)} units of firm demand that the rule engine bought or sent to review in a lot. Firm demand that never formed a lot (last-chance requests that conflict with unconfirmed wholesale demand, and retried demand whose release date passed months earlier) stays with the planner and is counted on the Delivery impact page. Lot contents stay as the rules built them (same requisitions, same MOQ grouping); only the factory and whether to buy change. Production starts on the window's PO date, as in the rules. A backup must save more than 10% of the unit cost, or deliver more on time, to be chosen over the primary.</p>
+      <p className="mt-3 text-xs text-faint">{d.evaluation_note} {d.routing_policy} Total supplied demand: {int(d.universe.all_units)} units; {int(d.universe.excluded_units)} units are ineligible under confirmation rules and disclosed separately. {d.service_basis}. Unbought units include review, quantity shortfalls and demand not yet due by the final run. A slider setting is a preference, not a guarantee of the lowest cost per unit or the best possible historical plan.</p>
     </>
   );
 }
