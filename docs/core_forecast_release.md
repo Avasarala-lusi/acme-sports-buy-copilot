@@ -1,15 +1,17 @@
 # Current core planning and forecast release
 
-October 30, 2026. This is the current release contract. Older worked examples and numerical tables in the
+October 30, 2026, supplemented November 5 by [rolling optimizer/benchmark release](optimizer_benchmark_release.md).
+This describes the core release. Older worked examples and numerical tables in the
 technical-documentation archive are historical and must not be quoted as current validation results.
 
 ## This week's scope
 
 The six-rule Buy Plan engine, weekly visibility, formal MID/EOM purchases, saved planner decisions,
 what-if checks, capacity, pull-forward, populated exports, five existing analyses and demand/load forecasting.
-The optimizer, simulated delivery probability, disruption drill, network benchmark and extra data-health
-prototype are upcoming work. They are retained in source but disabled by `features.experimental: false`.
-Their old benchmark numbers are not current acceptance evidence.
+The rolling optimizer and chronological planner benchmark are now separate read-only comparison features,
+controlled by independent flags. Simulated delivery probability, disruption drill and extra data-health
+prototypes remain disabled by `features.experimental: false`. Old optimizer numbers are not current evidence;
+see the November 5 supplement for the new method, validation and limitations.
 
 ## Confirmed rules and implementation choices
 

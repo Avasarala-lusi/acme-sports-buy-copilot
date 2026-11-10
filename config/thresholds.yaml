@@ -75,7 +75,9 @@ forecast:
   default_release_lag_weeks: 13 # assumption only when a factory has no known eligible PR history
 
 features:
-  experimental: false           # upcoming work: optimizer, simulated on-time risk, disruption drill, benchmark, data health
+  experimental: false           # upcoming: simulated on-time risk, disruption drill and data health
+  optimizer: true               # rolling known-demand comparison; separate from disabled prototypes
+  benchmark: true               # shared eligible population; earlier-only slider selection
 
 impact:
   price_per_unit_usd: 21         # [client] average price per unit to value late or undelivered units ($19-22 also fine)
@@ -87,11 +89,11 @@ risk:                            # [assumption] lead-time variation for on-time 
   seed: 7
 
 optimizer:                       # network planning: all certified factories together, 100% weekly capacity
-  # weight: 0 = cheapest plan, 1 = safest plan (most units expected on time); the recommended one comes from the benchmark
-  time_limit_s: 20               # the gap to the best possible plan is under 1% by then
+  # weight: 0 = cost-focused, 1 = planned-service-focused, after mandatory priority admission
+  time_limit_s: 20               # per solve; failure is disclosed as fallback, never claimed optimal
   mip_gap: 0.005
   enforce_mpq: true              # one production order per article/factory/window must reach MPQ
-  backup_penalty_per_unit: 0.1   # [assumption] a backup factory must save >10% of unit cost (or lateness) to be chosen
+  backup_penalty_per_unit: 0.1   # legacy disruption solver only; released comparison uses primary as a final tie-break
 
 benchmark:
   tuning_seasons: [FW25, SS26]   # the optimiser's recommended weight is chosen on these seasons only

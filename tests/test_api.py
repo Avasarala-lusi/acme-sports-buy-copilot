@@ -146,7 +146,16 @@ def test_impact_endpoint(client):
 
 def test_extension_endpoints(client):
     f = client.get("/features").json()
-    assert not any(f[k] for k in ["risk", "optimizer", "drill", "benchmark", "data_health", "ask"])
+    assert not any(f[k] for k in ["risk", "drill", "data_health", "ask"])
+    assert f["optimizer"] and f["benchmark"]
     assert f["forecast"]
-    for path in ["/risk", "/data-health", "/network-plans"]:
+    for path in ["/risk", "/data-health"]:
         assert client.get(path).status_code == 409
+
+
+def test_released_network_endpoint_does_not_enable_other_prototypes(client, monkeypatch):
+    from api import main
+    monkeypatch.setattr(main, "_network_results", lambda: {"complete": True, "service_basis": "Planned on-time units"})
+    r = client.get("/network-plans")
+    assert r.status_code == 200 and r.json()["complete"]
+    assert client.get("/risk").status_code == 409

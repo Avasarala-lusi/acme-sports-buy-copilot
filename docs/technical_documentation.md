@@ -1,7 +1,8 @@
 # Acme Sports Buy Planner: technical documentation
 
 > Historical description below predates the latest client-rule alignment. Use
-> [the current core/forecast release contract](core_forecast_release.md) and the settings view for current behavior. Old 23-window counts,
+> [the core/forecast release contract](core_forecast_release.md), [rolling optimizer/benchmark release](optimizer_benchmark_release.md)
+> and the settings view for current behavior. Old 23-window counts,
 > numeric comparisons and last-chance overload exceptions are not current validation results.
 
 Team Vantage · University at Buffalo × Globant · October 2026

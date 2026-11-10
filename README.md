@@ -26,9 +26,14 @@ supply-chain challenge: weekly visibility, MID/EOM purchases. Runs on the client
 Current rule details and provisional defaults: `docs/client_rule_updates.md`. Old worked examples and
 numeric comparisons must be regenerated before reuse. `suggested_rdd` is the single proposed arrival date.
 
-Optimizer, simulated on-time risk, planner benchmark, disruption drill and data-health extensions are
-**upcoming prototypes**, disabled in this release (`features.experimental: false`). Their code is retained
-for later weeks; it is not validated core functionality. See [current release contract](docs/core_forecast_release.md).
+Cost/service planning and planner benchmark use a read-only chronological replay: client priority and quantity/
+capacity checks come before cost versus planned on-time service. They compare the full eligible population,
+with earlier-period setting selection and separately reported later results. They do not change saved purchases.
+See [optimizer/benchmark release details](docs/optimizer_benchmark_release.md).
+
+Simulated on-time risk, disruption drill and extra data-health extensions remain disabled
+(`features.experimental: false`). Cost/service and benchmark have independent feature flags, so enabling them
+does not expose these prototypes. See [core release contract](docs/core_forecast_release.md).
 
 ## Run it
 Validated with Python 3.12; use Python 3.12 and Node.js 18+ for the documented setup.
@@ -54,6 +59,9 @@ pytest -m experimental                     # optional prototypes; not current ac
 The first load processes all 100 runs and may take a while; the automatic plan is cached in `outputs/`
 and rebuilt when engine code, configuration or input data changes. Saved decisions use a separate
 replay and never alter the cached automatic reference.
+The first optimizer/benchmark calculation replays five slider settings and may take 15–25 minutes on a laptop. Per-setting
+caches retain completed work; subsequent visits reuse the combined result. Historical comparisons exclude saved
+manual scenarios and explicitly disclose the supplied baseline's different purchase dates.
 
 On macOS, XGBoost also requires the OpenMP runtime (`brew install libomp`). Windows users can create
 the environment with `py -3.12 -m venv .venv` and activate `.venv\\Scripts\\activate` in Command Prompt

@@ -1,19 +1,13 @@
-"""Cost vs. service planning: one plan for all six factories at once (mixed-integer programme).
+"""Priority-preserving joint factory assignment, one received-demand window at a time.
 
-The rule engine decides lot by lot, walking each article's backup chain. The optimiser takes the same lots (the rule
-plan's bought lots plus the lots it sent to planner review, each requisition once, in the first window it was due)
-and chooses, for every lot, one certified factory or "not bought", for all buying windows together:
+Released cost/service and benchmark pages use RollingOptimizer and solve(). The
+normal Planner cascade owns eligibility, MOQ, grouping, piggyback and final MPQ
+checks. Each window keeps previous capacity commitments, fixes purchase admission
+in client priority order, then trades production cost against planned on-time units.
 
-- capacity: every factory-week stays at or below the hard limit (100%), with the same business-day spread of a lot's
-  units over its production weeks as the rule engine; closed factory-weeks (a disruption drill) have no capacity,
-- MPQ (optional, on by default): a production order (article, factory, buying window) is either empty or reaches the
-  category MPQ; last-chance lots are bought even below it, as in the rules,
-- objective: (1 - w) x production cost + w x units expected late, with a large penalty for every unit not bought.
-  w = 0 is the cheapest plan, w = 1 the safest (most units expected on time, using the lead-time variation in
-  engine.risk). Both terms are per unit and of similar size, so the slider moves smoothly between them.
-
-Lot contents (which requisitions, MOQ grouping) are kept as the rules built them; only the factory and the buy
-decision change. Production starts on the window's PO date, as in the rules.
+Network/_legacy_whole_history_solve remain solely for the disabled disruption
+prototype. They are not used by the released optimizer or benchmark and must be
+migrated before disruption is enabled. No full-history optimality is claimed.
 """
 from __future__ import annotations
 
@@ -72,7 +66,6 @@ def _closed(closures, factory, week) -> bool:
 def options(planner: Planner, u: pd.DataFrame, model: DelayModel | None = None) -> pd.DataFrame:
     """Every certified factory for every lot: lead times, arrival, cost, late and expected on-time units, and the
     lot's units per production week."""
-    model = model or DelayModel(planner)
     ledger = CapacityLedger(planner.factories["weekly_capacity_units"].to_dict(),
                             planner.cfg["capacity"]["spread_over_manufacturing"])
     mult = planner.factories["cost_multiplier"].astype(float).to_dict()
@@ -86,7 +79,7 @@ def options(planner: Planner, u: pd.DataFrame, model: DelayModel | None = None) 
             m, t = planner.lot_lead_times(ids, f)
             arrival = (lot.start + pd.Timedelta(days=float(m) + float(t))).normalize()
             slack = np.asarray((rdd - arrival).days, dtype=float)
-            p = model.p_on_time(f, slack)
+            p = model.p_on_time(f, slack) if model is not None else (slack >= 0).astype(float)
             rows.append({"lot": i, "factory": f, "mfg": float(m), "trans": float(t), "arrival": arrival,
                          "cost": lot.qty * unit_cost * mult[f], "on_time_units": float(qty[slack >= 0].sum()),
                          "expected_on_time_units": float((qty * p).sum()),
@@ -94,7 +87,7 @@ def options(planner: Planner, u: pd.DataFrame, model: DelayModel | None = None) 
     return pd.DataFrame(rows)
 
 
-def solve(planner: Planner, weight: float, u: pd.DataFrame | None = None, opts: pd.DataFrame | None = None,
+def _legacy_whole_history_solve(planner: Planner, weight: float, u: pd.DataFrame | None = None, opts: pd.DataFrame | None = None,
           closures=None, enforce_mpq: bool | None = None, time_limit: float | None = None) -> dict:
     """Optimal factory (or not bought) per lot for the cost/service weight. Returns the choice and its KPIs."""
     cfg = planner.cfg.get("optimizer", {})
@@ -169,6 +162,192 @@ def solve(planner: Planner, weight: float, u: pd.DataFrame | None = None, opts: 
             "gap_pct": float(getattr(res, "mip_gap", None) or 0) * 100, "objective": float(res.fun),
             "seconds": time.time() - t0, "u": u, "opts": opts}
 
+
+
+def solve(planner: Planner, weight: float, u: pd.DataFrame | None = None, opts: pd.DataFrame | None = None,
+          closures=None, enforce_mpq: bool | None = None, time_limit: float | None = None,
+          committed: CapacityLedger | None = None, allow_topup: bool = False) -> dict:
+    """One known buying window. Fix admissions in client priority order, then optimize factories.
+
+    Lexicographic binary blocks avoid huge priority coefficients and do not let a
+    large low-priority order displace a feasible high-priority one. No delay model
+    is used: service means units arriving by their original requested dates.
+    """
+    if enforce_mpq is False:
+        raise ValueError('MPQ cannot be disabled for a released optimizer plan')
+    cfg = planner.cfg.get('optimizer', {})
+    limit = float(time_limit or cfg.get('time_limit_s', 20))
+    u = universe(planner) if u is None else u.copy().reset_index(drop=True)
+    if len(u) and u['run_id'].nunique() != 1:
+        raise ValueError('Solve one buying window at a time; use RollingOptimizer for historical replay')
+    if not len(u):
+        return dict(weight=float(weight), choice=pd.Series(dtype=int), status='No candidates', gap_pct=0.,
+                    objective=0., seconds=0., u=u, opts=pd.DataFrame(), priority_proven=True)
+    opts = options(planner, u) if opts is None else opts.copy().reset_index(drop=True)
+    ledger = committed or CapacityLedger(planner.factories['weekly_capacity_units'].to_dict(),
+                                         planner.cfg['capacity']['spread_over_manufacturing'], closures)
+    if closures is not None:
+        ledger = ledger.copy()
+        ledger.closures = [(f, pd.Timestamp(a), pd.Timestamp(b)) for f, a, b in closures]
+    t0 = time.monotonic()
+    qty = u['qty'].to_numpy(dtype=float)
+    moq = float(planner.cfg['quantities']['moq_per_market'])
+    # Lot membership has already passed market/RDD grouping in the rule cascade.
+    from engine.rules.exclusion import forecast_excluded
+    eligible = (qty >= moq) | u['last_chance'].to_numpy(dtype=bool)
+    for i, lot in u.iterrows():
+        ids = lot['pr_ids'].split(',')
+        known = all(planner.run_index[planner.rows[p]['run_id']] <= planner.run_index[lot['run_id']] for p in ids)
+        confirmed = all(not forecast_excluded(planner.rows[p]['channel_id'], planner.rows[p]['has_order'],
+                                              planner.rows[p]['early_buy']) for p in ids)
+        if not known or not confirmed or not planner.rdd_span_ok(ids):
+            eligible[i] = False
+    if len(opts):
+        opts = opts[opts.apply(lambda r: eligible[int(r['lot'])] and r['factory'] in
+                              planner.certified[u.loc[int(r['lot']), 'article_id']], axis=1)].reset_index(drop=True)
+    if not len(opts):
+        return dict(weight=float(weight), choice=pd.Series(-1, index=u.index), status='No eligible options',
+                    gap_pct=0., objective=0., seconds=time.monotonic()-t0, u=u, opts=opts, priority_proven=True)
+    # Each fixed band obeys the core's article/factory/RDD policy. Partitioning is
+    # conservative: an unselected anchor can prevent pooling, never widen a span.
+    bands = {}
+    for run, group in u.groupby('run_id', sort=False):
+        for factory in opts['factory'].unique():
+            records = [dict(article_id=r.article_id, assigned_factory=factory, earliest_rdd=planner._min_rdd(r.pr_ids.split(',')),
+                            pr_ids=r.pr_ids, lot_index=i) for i, r in group.iterrows()
+                       if ((opts['lot'] == i) & (opts['factory'] == factory)).any()]
+            for k, band in enumerate(planner.mpq_groups(records)):
+                for record in band:
+                    bands[(record['lot_index'], factory)] = (run, factory, k)
+    keys = [bands[(int(r.lot), r.factory)] for r in opts.itertuples()]
+    order_ids = {key: i for i, key in enumerate(dict.fromkeys(keys))}
+    nopt = len(opts)
+    n = nopt + len(order_ids)
+    rows, cols, vals, lo, hi = [], [], [], [], []
+    def constraint(indices, values, lower=-np.inf, upper=np.inf):
+        row = len(lo)
+        rows.extend([row]*len(indices)); cols.extend(indices); vals.extend(values)
+        lo.append(lower); hi.append(upper)
+    lot_options = {i: list(opts.index[opts['lot'] == i]) for i in u.index}
+    for ix in lot_options.values():
+        if ix: constraint(ix, [1.]*len(ix), upper=1.)
+    fw = {}
+    for j, opt in opts.iterrows():
+        for week, units in opt['alloc']:
+            fw.setdefault((opt['factory'], week), []).append((j, float(units)))
+    hard = planner.cfg['capacity']['hard_limit_pct']/100
+    for (factory, week), parts in fw.items():
+        cap = 0. if ledger.closed(factory, week) else ledger.capacity[factory]*hard
+        headroom = cap-ledger.units[factory].get(week, 0.)
+        if headroom < -1e-6: raise ValueError('Existing commitments exceed the planning capacity ceiling')
+        constraint([j for j, _ in parts], [q for _, q in parts], upper=max(0., headroom))
+    for key, y in order_ids.items():
+        indices = [j for j, k in enumerate(keys) if k == key]
+        last = [j for j in indices if bool(u.loc[int(opts.loc[j, 'lot']), 'last_chance'])]
+        category = u.loc[int(opts.loc[indices[0], 'lot']), 'category']
+        minimum = float(mpq_for(category, planner.cfg['quantities']['mpq']))
+        if allow_topup: minimum *= 1-planner.cfg['piggyback']['tolerance_pct']/100
+        constraint(indices+[nopt+y], [qty[int(opts.loc[j, 'lot'])] for j in indices]+[-minimum], lower=0.)
+        # A *selected* last-chance lot permits the core's warning exception.
+        for j in indices:
+            if j not in last:
+                constraint([j, nopt+y]+last, [1., -1.]+[-1.]*len(last), upper=0.)
+    def run(cost):
+        A = coo_matrix((vals, (rows, cols)), shape=(len(lo), n)).tocsr()
+        result = milp(cost, constraints=LinearConstraint(A, np.asarray(lo), np.asarray(hi)),
+                      integrality=np.ones(n), bounds=Bounds(0, 1),
+                      options={'time_limit':limit, 'mip_rel_gap':0., 'disp':False})
+        if result.x is None or result.status != 0:
+            raise RuntimeError(f'Window solver did not prove its priority/assignment result: {result.message}')
+        return result
+    priority = sorted(u.index, key=lambda i: planner.priority_key(u.loc[i, 'pr_ids'].split(',')))
+    for start in range(0, len(priority), 16):
+        block = priority[start:start+16]
+        cost = np.zeros(n)
+        for rank, i in enumerate(block):
+            cost[lot_options[i]] = -float(2**(len(block)-rank-1))
+        if not cost.any(): continue
+        result = run(cost)
+        for i in block:
+            ix = lot_options[i]
+            if ix:
+                admitted = float(result.x[ix].sum() > .5)
+                constraint(ix, [1.]*len(ix), lower=admitted, upper=admitted)
+    oqty = qty[opts['lot'].to_numpy(dtype=int)]
+    scale = float(opts['cost'].sum()/oqty.sum())
+    late = oqty-opts['on_time_units'].to_numpy()
+    w = float(np.clip(weight, 0, 1))
+    primary = u['primary_factory'].to_numpy()[opts['lot'].to_numpy(dtype=int)]
+    normalized = opts['cost'].to_numpy()/scale
+    cost = np.r_[(1-w)*normalized+w*late+1e-7*(normalized+late+(opts['factory'].to_numpy()!=primary)),
+                 np.zeros(len(order_ids))]
+    result = run(cost)
+    selected = opts.index[result.x[:nopt] > .5]
+    choice = pd.Series(-1, index=u.index, dtype=int)
+    for j in selected: choice.loc[int(opts.loc[j, 'lot'])] = int(j)
+    return dict(weight=w, choice=choice, status=result.message, gap_pct=float(result.mip_gap)*100,
+                objective=float(result.fun), seconds=time.monotonic()-t0, u=u, opts=opts, priority_proven=True)
+
+
+class RollingOptimizer(Planner):
+    """Same six-rule cascade, optimized routing at each formal window; no future PR lookahead.
+
+    Drafts use the normal read-only preview. Formal windows jointly choose among
+    certified factories, an explicit alternative routing policy to the chain.
+    Quantity top-ups and final MPQ checks stay in the shared core cascade.
+    """
+    def __init__(self, data=None, config=None, decisions=None, weight=.5):
+        self.weight = float(weight)
+        self.optimizer_runs = []
+        super().__init__(data=data, config=config, decisions=decisions)
+
+    def _assign(self, lots, po_date):
+        run = self.runs.iloc[self.processed+1]
+        if not self.calendar.is_window(run['po_execution_date']) or not lots:
+            return super()._assign(lots, po_date)
+        u = pd.DataFrame([dict(lot_id=f"{run['run_id']}-candidate-{i}", run_id=run['run_id'], article_id=l.article_id,
+             category=self.rows[l.pr_ids[0]]['category'], market_destination=l.market,
+             primary_factory=self.rows[l.pr_ids[0]]['primary'], pr_ids=','.join(l.pr_ids), last_chance=l.last_chance,
+             rule_factory=None, qty=self._qty(l.pr_ids), start=pd.Timestamp(po_date), season=run['season'] if 'season' in run else 'TEST')
+             for i, l in enumerate(lots)])
+        opts = options(self, u)
+        # Respect explicit pull-forward target and its stricter destination headroom.
+        for i, lot in enumerate(lots):
+            if lot.factory:
+                mask = opts['lot'] == i
+                keep = (opts['factory'] == lot.factory) & opts.apply(
+                    lambda r: self.ledger.utilization_with(r['factory'], po_date, r['mfg'], u.loc[i,'qty'])
+                    < self.cfg['capacity']['backup_threshold_pct'] if r['lot'] == i else True, axis=1)
+                opts = opts[~mask | keep]
+        opts = opts.reset_index(drop=True)
+        try:
+            s = solve(self, self.weight, u, opts, committed=self.ledger, allow_topup=True)
+        except RuntimeError as exc:
+            self.optimizer_runs.append(dict(run_id=run['run_id'], fallback=True, reason=str(exc)))
+            return super()._assign(lots, po_date)
+        self.optimizer_runs.append(dict(run_id=run['run_id'], fallback=False, seconds=s['seconds']))
+        ledger = self.ledger.copy()
+        placed = {}
+        for i in sorted(u.index, key=lambda j:self.priority_key(lots[j].pr_ids)):
+            lot = lots[i]; chosen = s['choice'].loc[i]
+            factory = s['opts'].loc[chosen, 'factory'] if chosen >= 0 else u.loc[i, 'primary_factory']
+            m, t = self.lot_lead_times(lot.pr_ids, factory)
+            qty = self._qty(lot.pr_ids)
+            before = ledger.utilization(factory, ledger.weeks_for(po_date, m))
+            after = ledger.utilization_with(factory, po_date, m, qty)
+            warnings = []
+            if chosen < 0:
+                warnings.append('No feasible priority-preserving assignment meeting capacity and quantity checks; planner review')
+            elif after >= self.cfg['capacity']['backup_threshold_pct']:
+                warnings.append('Above the 85% soft threshold; within the 100% hard ceiling')
+            if chosen >= 0: ledger.add(factory, po_date, m, qty)
+            rdd = self._min_rdd(lot.pr_ids)
+            placed[id(lot)] = dict(factory=factory, primary=u.loc[i,'primary_factory'], backup=factory!=u.loc[i,'primary_factory'],
+                 mfg=m, trans=t, release=rdd-pd.Timedelta(days=m+t), start=pd.Timestamp(po_date), rdd=rdd, qty=qty,
+                 status='ok' if chosen >= 0 else 'review', util_before=before, util_after=after,
+                 reasons=['Joint factory assignment; client priority fixed before cost/service choice'], warnings=warnings,
+                 alternatives=self._alternatives(lot, ledger, po_date, qty) if chosen < 0 else [])
+        return ledger, placed
 
 def rule_choice(u: pd.DataFrame, opts: pd.DataFrame) -> pd.Series:
     """The rule engine's plan in the same terms: its factory for bought lots, not bought for review lots."""
@@ -293,7 +472,8 @@ class Network:
         self.rule = rule_choice(self.u, self.opts)
 
     def solve(self, weight: float, closures=None, **kw) -> dict:
-        return solve(self.planner, weight, self.u, self.opts, closures=closures, **kw)
+        # Disabled disruption prototype only; released UI uses RollingOptimizer.
+        return _legacy_whole_history_solve(self.planner, weight, self.u, self.opts, closures=closures, **kw)
 
     def report(self, weight: float) -> dict:
         s = self.solve(weight)

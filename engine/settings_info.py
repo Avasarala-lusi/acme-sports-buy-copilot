@@ -54,7 +54,8 @@ def settings_items(cfg: dict) -> list[dict]:
         ("Pull-forward source", "Original future scheduled buying run_id, not intake run", "Client field definition; team mapping"),
         ("Forecast", f"{cfg.get('forecast', {}).get('model', 'stage_seasonal')}; 17-week intake horizon, four-window load view", "Team method; historical evaluation required"),
         ("Forecast warnings", "Saved decisions included; estimates warn but never reserve capacity or block a valid purchase", "User-approved workflow"),
-        ("Bonus features", "Upcoming; optimizer, on-time simulation and disruption tools are disabled by default", "User scope decision"),
+        ("Optimizer and benchmark", "Read-only chronological replay; client priority before cost/planned service; full eligible population", "User-approved release workflow; see validation results"),
+        ("Later additions", "On-time simulation, disruption drill, data-health and plain-English tools remain disabled", "User scope decision"),
     ])
     return [{"topic": t, "setting": s, "status": st} for t, s, st in rows]
 

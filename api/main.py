@@ -168,9 +168,10 @@ def data_issues():
 
 @app.get("/features")
 def features():
-    experimental = automatic_planner().cfg.get("features", {}).get("experimental", False)
-    return {"forecast": True, "risk": experimental, "optimizer": experimental, "drill": experimental,
-            "benchmark": experimental, "ask": False, "data_health": experimental}
+    cfg = automatic_planner().cfg.get("features", {})
+    experimental = cfg.get("experimental", False)
+    return {"forecast": True, "risk": experimental, "optimizer": cfg.get("optimizer", False), "drill": experimental,
+            "benchmark": cfg.get("benchmark", False), "ask": False, "data_health": experimental}
 
 
 def _require_experimental():
@@ -549,7 +550,9 @@ def _network_results():
 @app.get("/network-plans")
 def network_plans():
     """Cost/service frontier and planner benchmark (one optimiser solve per weight; a few minutes the first time)."""
-    _require_experimental()
+    cfg = automatic_planner().cfg.get("features", {})
+    if not (cfg.get("optimizer", False) or cfg.get("benchmark", False)):
+        raise HTTPException(409, "Cost/service planning and benchmark are disabled")
     with _network_lock:
         return _network_results()
 
